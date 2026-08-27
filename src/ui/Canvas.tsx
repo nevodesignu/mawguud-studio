@@ -7,9 +7,14 @@ import type { TextEl, DividerEl, El } from '../model'
 import { boltCenters } from '../model'
 
 interface DragState {
-  kind: 'move' | 'resize' | 'pan' | 'bridge' | 'marquee'
+  kind: 'move' | 'resize' | 'pan' | 'bridge' | 'marquee' | 'divedit'
   elId?: string
   moved?: boolean
+  divHandle?: string
+  fixedX?: number
+  fixedY?: number
+  divStartTh?: number
+  divStartPerp?: number
   startWX: number
   startWY: number
   groupStart?: Map<string, { x: number; y: number }>
@@ -68,6 +73,19 @@ export function Canvas() {
   const dragRef = useRef<DragState | null>(null)
   const [guides, setGuides] = useState<{ v: number | null; h: number | null }>({ v: null, h: null })
   const [marquee, setMarquee] = useState<Box | null>(null)
+  const [editing, setEditing] = useState<{ id: string; original: string } | null>(null)
+
+  const closeEditor = useCallback((commit: boolean) => {
+    setEditing((cur) => {
+      if (cur) {
+        const s = useStudio.getState()
+        const el = s.design.elements.find((x) => x.id === cur.id)
+        if (!commit && el && el.kind === 'text') s.updateEl(cur.id, { text: cur.original })
+        s.endGesture(commit && !!el && el.kind === 'text' && el.text !== cur.original)
+      }
+      return null
+    })
+  }, [])
 
   const toWorld = useCallback((clientX: number, clientY: number): [number, number] => {
     const rect = svgRef.current!.getBoundingClientRect()
@@ -189,11 +207,26 @@ export function Canvas() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if (mode !== 'design') return
+    const elId = (e.target as SVGElement).getAttribute('data-elid')
+    if (!elId) return
+    const el = useStudio.getState().design.elements.find((x) => x.id === elId)
+    if (el && el.kind === 'text') {
+      useStudio.getState().beginGesture()
+      setEditing({ id: elId, original: el.text })
+    }
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
     const s = useStudio.getState()
     const target = e.target as SVGElement
     const [wx, wy] = toWorld(e.clientX, e.clientY)
-    ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
+    try {
+      ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
+    } catch {
+      /* synthetic or already-released pointers have no capturable id */
+    }
 
     if (e.button === 1 || e.button === 2) {
       dragRef.current = { kind: 'pan', startWX: wx, startWY: wy, startPanX: s.panX, startPanY: s.panY, startClientX: e.clientX, startClientY: e.clientY }
@@ -206,6 +239,30 @@ export function Canvas() {
       if (bridge) {
         s.beginGesture()
         dragRef.current = { kind: 'bridge', bridgeKey, bridgeHole: bridge.holeRing, startWX: wx, startWY: wy }
+        return
+      }
+    }
+
+    const divHandle = target.getAttribute('data-divhandle')
+    if (divHandle && s.selectedIds.length === 1) {
+      const el = s.design.elements.find((x) => x.id === s.selectedIds[0])
+      if (el && el.kind === 'divider') {
+        const ux = el.vertical ? 0 : 1
+        const uy = el.vertical ? 1 : 0
+        // the end opposite to the dragged one stays planted
+        const sign = divHandle === 'b' ? -1 : 1
+        s.beginGesture()
+        dragRef.current = {
+          kind: 'divedit',
+          elId: el.id,
+          divHandle,
+          fixedX: el.x + sign * ux * (el.length / 2),
+          fixedY: el.y + sign * uy * (el.length / 2),
+          divStartTh: el.thickness,
+          divStartPerp: el.vertical ? Math.abs(wx - el.x) : Math.abs(wy - el.y),
+          startWX: wx,
+          startWY: wy,
+        }
         return
       }
     }
@@ -336,6 +393,29 @@ export function Canvas() {
       )
       return
     }
+    if (drag.kind === 'divedit' && drag.elId) {
+      const el = s.design.elements.find((x) => x.id === drag.elId)
+      if (!el || el.kind !== 'divider') return
+      drag.moved = true
+      if (drag.divHandle === 'a' || drag.divHandle === 'b') {
+        const ux = el.vertical ? 0 : 1
+        const uy = el.vertical ? 1 : 0
+        const sign = drag.divHandle === 'b' ? 1 : -1
+        const proj = ((wx - drag.fixedX!) * ux + (wy - drag.fixedY!) * uy) * sign
+        const len = Math.max(5, Math.round(proj * 10) / 10)
+        s.updateEl(el.id, {
+          length: len,
+          x: Math.round((drag.fixedX! + sign * ux * (len / 2)) * 10) / 10,
+          y: Math.round((drag.fixedY! + sign * uy * (len / 2)) * 10) / 10,
+        })
+      } else {
+        // delta-based so grabbing the handle never jumps the thickness
+        const dist = el.vertical ? Math.abs(wx - el.x) : Math.abs(wy - el.y)
+        const th = drag.divStartTh! + 2 * (dist - drag.divStartPerp!)
+        s.updateEl(el.id, { thickness: Math.min(40, Math.max(0.4, Math.round(th * 10) / 10)) })
+      }
+      return
+    }
     if (drag.kind === 'resize' && drag.resizeStarts) {
       const cx = drag.centerX!
       const cy = drag.centerY!
@@ -360,7 +440,7 @@ export function Canvas() {
   const onPointerUp = () => {
     const s = useStudio.getState()
     const drag = dragRef.current
-    if (drag && (drag.kind === 'move' || drag.kind === 'resize' || drag.kind === 'bridge')) {
+    if (drag && (drag.kind === 'move' || drag.kind === 'resize' || drag.kind === 'bridge' || drag.kind === 'divedit')) {
       // only commit an undo step if something actually changed - a plain
       // click-select must not pollute the history
       s.endGesture(!!drag.moved)
@@ -397,6 +477,7 @@ export function Canvas() {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onLostPointerCapture={onPointerUp}
+        onDoubleClick={onDoubleClick}
       >
         <g transform={`translate(${panX} ${panY}) scale(${zoom})`}>
           {/* artboard */}
@@ -453,6 +534,30 @@ export function Canvas() {
           {guides.h !== null && <line x1={-20} y1={guides.h} x2={sign.w + 20} y2={guides.h} className="guide" strokeWidth={px(1)} />}
         </g>
       </svg>
+      {editing &&
+        (() => {
+          const el = design.elements.find((x) => x.id === editing.id)
+          if (!el || el.kind !== 'text') return null
+          const fontPx = Math.min(56, Math.max(15, el.heightMm * zoom * 0.6))
+          return (
+            <input
+              className="inline-edit"
+              dir="auto"
+              autoFocus
+              value={el.text}
+              spellCheck={false}
+              style={{ left: panX + el.x * zoom, top: panY + el.y * zoom, fontSize: fontPx }}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => useStudio.getState().updateEl(el.id, { text: e.target.value.replace(/\n/g, ' ') })}
+              onBlur={() => closeEditor(true)}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') closeEditor(true)
+                if (e.key === 'Escape') closeEditor(false)
+              }}
+            />
+          )
+        })()}
       <div className="zoom-controls">
         <button onClick={() => useStudio.getState().setView(Math.min(20, zoom * 1.25), panX, panY)}>+</button>
         <span>{`${Math.round(zoom * 100) / 100}px/mm`}</span>
@@ -530,11 +635,39 @@ function DividerView({ el, selected, single, px }: { el: DividerEl; selected: bo
   const w = el.vertical ? el.thickness : el.length
   const h = el.vertical ? el.length : el.thickness
   const pad = 2.5
+  const hs = px(9)
+  const ux = el.vertical ? 0 : 1
+  const uy = el.vertical ? 1 : 0
+  const endCursor = el.vertical ? 'ns-resize' : 'ew-resize'
+  const sideCursor = el.vertical ? 'ew-resize' : 'ns-resize'
+  const ends: [string, number, number][] = [
+    ['a', el.x - (ux * el.length) / 2, el.y - (uy * el.length) / 2],
+    ['b', el.x + (ux * el.length) / 2, el.y + (uy * el.length) / 2],
+  ]
+  const sides: [string, number, number][] = [
+    ['s1', el.x - (uy * (el.thickness / 2 + pad)), el.y - (ux * (el.thickness / 2 + pad))],
+    ['s2', el.x + (uy * (el.thickness / 2 + pad)), el.y + (ux * (el.thickness / 2 + pad))],
+  ]
   return (
     <g>
       <path d={d} fill="var(--ink)" pointerEvents="none" />
       <rect x={el.x - w / 2 - pad} y={el.y - h / 2 - pad} width={w + pad * 2} height={h + pad * 2} fill="transparent" data-elid={el.id} style={{ cursor: 'move' }} />
-      {selected && <SelectionBox x={el.x - w / 2 - pad} y={el.y - h / 2 - pad} w={w + pad * 2} h={h + pad * 2} px={px} handles={single} />}
+      {selected && (
+        <g>
+          <rect x={el.x - w / 2 - pad} y={el.y - h / 2 - pad} width={w + pad * 2} height={h + pad * 2} className="selection" strokeWidth={px(1.4)} pointerEvents="none" />
+          {single && (
+            <g>
+              {/* drag an end to stretch the line, a side to change thickness */}
+              {ends.map(([id, cx, cy]) => (
+                <rect key={id} x={cx - hs / 2} y={cy - hs / 2} width={hs} height={hs} className="handle" data-divhandle={id} strokeWidth={px(1)} style={{ cursor: endCursor }} />
+              ))}
+              {sides.map(([id, cx, cy]) => (
+                <circle key={id} cx={cx} cy={cy} r={hs / 2} className="handle" data-divhandle={id} strokeWidth={px(1)} style={{ cursor: sideCursor }} />
+              ))}
+            </g>
+          )}
+        </g>
+      )}
     </g>
   )
 }

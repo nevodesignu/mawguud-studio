@@ -400,6 +400,27 @@ body {
   border-color: rgba(47, 214, 181, 0.4);
 }
 
+.inline-edit {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: rgba(14, 17, 22, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1.5px solid var(--accent-2);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 8px 18px;
+  text-align: center;
+  min-width: 140px;
+  max-width: 80%;
+  font-family: inherit;
+  font-weight: 600;
+  box-shadow:
+    var(--shadow-pop),
+    var(--ring);
+  outline: none;
+  z-index: 10;
+}
+
 /* ============ controls ============ */
 button {
   background: var(--surface-2);
