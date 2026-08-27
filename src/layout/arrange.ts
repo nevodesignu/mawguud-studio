@@ -70,7 +70,6 @@ const hasArabic = (t: string) => /[؀-ۿ]/.test(t)
 /** Height of each line in mm - the heart of the two modes. */
 type HeightOf = (m: Measured) => number
 
-const userHeights: HeightOf = (m) => Math.max(1, m.el.heightMm)
 const scaled = (s: number): HeightOf => (m) => f1(ratioOf(m) * s)
 
 /** Stack extent in mm: ink heights + tight gaps. */
@@ -133,11 +132,39 @@ function unifyAxes(design: Design, patches: Record<string, ElPatch>): void {
   }
 }
 
+/**
+ * LAW 15: sibling texts of the same kind at ALMOST the same size were meant to
+ * be equal - unify them UP to the biggest (sizes stay sovereign when clearly
+ * different, and nothing ever shrinks).
+ */
+function unifySizes(design: Design): Map<string, number> {
+  const unified = new Map<string, number>()
+  const classes: Record<string, { id: string; hh: number }[]> = {}
+  for (const el of design.elements) {
+    if (el.kind !== 'text' || !el.text.trim()) continue
+    const role = isNumberLine(el.text) ? 'number' : LABEL_RE.test(el.text.trim()) ? 'label' : 'name'
+    ;(classes[role] ??= []).push({ id: el.id, hh: Math.max(1, el.heightMm) })
+  }
+  for (const group of Object.values(classes)) {
+    group.sort((a, b) => a.hh - b.hh)
+    let i = 0
+    while (i < group.length) {
+      let j = i
+      while (j + 1 < group.length && group[j + 1].hh <= group[j].hh * 1.12) j++
+      const max = group[j].hh
+      for (let k = i; k <= j; k++) unified.set(group[k].id, max)
+      i = j + 1
+    }
+  }
+  return unified
+}
+
 /** Compute perfect-layout patches for every element (keyed by element id). */
 export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Promise<Record<string, ElPatch>> {
   const mode: ArrangeMode = opts.mode ?? 'layout'
   const { w, h } = design.sign
-  const { patches, stacks, rows } = await arrangeCore(design, mode)
+  const heightOverride = mode === 'layout' ? unifySizes(design) : undefined
+  const { patches, stacks, rows } = await arrangeCore(design, mode, heightOverride)
   if (mode !== 'layout') {
     unifyAxes(design, patches)
     return patches
@@ -192,9 +219,10 @@ interface ArrangeResult {
   rows: string[][] // horizontal groups - members share Y
 }
 
-async function arrangeCore(design: Design, mode: ArrangeMode): Promise<ArrangeResult> {
+async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: Map<string, number>): Promise<ArrangeResult> {
   const stacks: string[][] = []
   const rows: string[][] = []
+  const userHeights: HeightOf = (m) => heightOverride?.get(m.el.id) ?? Math.max(1, m.el.heightMm)
   const { w, h } = design.sign
   const patches: Record<string, ElPatch> = {}
   const texts = design.elements.filter((e): e is TextEl => e.kind === 'text' && e.text.trim().length > 0)

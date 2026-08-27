@@ -314,6 +314,22 @@ async function law14CrossAxis() {
   assert(Math.abs(t('محمود').y - t('سارة').y) < 0.11, 'LAW 14', `cross-divider rows not unified (2nd): ${t('محمود').y} vs ${t('سارة').y}`)
 }
 
+/** LAW 15: near-equal sibling sizes unify UP; clearly different sizes stay. */
+async function law15SiblingSizes() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 300, h: 150, boltDia: 6.5, boltInsetX: 15.3, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('l15', signFromSpec(sp), botElements(sp, [['Ahmed', 'Malek'], ['Villa', '30']]))
+  const t = (txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  t('Ahmed').heightMm = 28.4
+  t('Malek').heightMm = 31 // almost equal - the exact case the owner spotted
+  t('Villa').heightMm = 19.1
+  t('30').heightMm = 45
+  const patches = await arrangeDesign(design, { mode: 'layout' })
+  for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  assert(Math.abs(t('Ahmed').heightMm - 31) < 0.11 && Math.abs(t('Malek').heightMm - 31) < 0.11, 'LAW 15', `siblings not unified up: ${t('Ahmed').heightMm} / ${t('Malek').heightMm}`)
+  assert(Math.abs(t('30').heightMm - 45) < 0.11, 'LAW 15', 'clearly-different number was touched')
+  assert(Math.abs(t('Villa').heightMm - 19.1) < 0.11, 'LAW 15', 'label size was touched')
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -333,6 +349,7 @@ async function main() {
   await law11BigText()
   await alignmentLaws()
   await law14CrossAxis()
+  await law15SiblingSizes()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')
