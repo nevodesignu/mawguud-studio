@@ -183,11 +183,11 @@ export function PropertiesPanel() {
             <Num label="Height" value={sel.heightMm} step={1} min={3} suffix="mm" onChange={(v) => st.updateEl(sel.id, { heightMm: v, sized: true })} />
             <Num label="Tracking" value={sel.spacingEm * 100} step={1} min={0} max={40} suffix="%em" onChange={(v) => st.updateEl(sel.id, { spacingEm: v / 100 })} />
             <p className="hint">Tracking never breaks Arabic joins — it only spaces Latin letters and separate words.</p>
-            <Num label="X" value={sel.x} suffix="mm" onChange={(v) => st.updateEl(sel.id, { x: v })} />
-            <Num label="Y" value={sel.y} suffix="mm" onChange={(v) => st.updateEl(sel.id, { y: v })} />
+            <Num label="X" value={sel.x} suffix="mm" onChange={(v) => st.updateEl(sel.id, { x: v, placed: true })} />
+            <Num label="Y" value={sel.y} suffix="mm" onChange={(v) => st.updateEl(sel.id, { y: v, placed: true })} />
             <div className="row">
-              <button onClick={() => st.updateEl(sel.id, { x: design.sign.w / 2 })}>Center ↔</button>
-              <button onClick={() => st.updateEl(sel.id, { y: design.sign.h / 2 })}>Center ↕</button>
+              <button onClick={() => st.updateEl(sel.id, { x: design.sign.w / 2, placed: true })}>Center ↔</button>
+              <button onClick={() => st.updateEl(sel.id, { y: design.sign.h / 2, placed: true })}>Center ↕</button>
             </div>
             <div className="row">
               <button onClick={() => st.duplicateEl(sel.id)}>Duplicate</button>

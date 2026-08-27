@@ -3,10 +3,13 @@
 // THE CONTRACT (the owner's words: "I do the sizing - just make the sign
 // ready"): two modes.
 //
-//   'layout'    - Perfect-it. NEVER touches a text size. Takes the heights the
-//                 user set and does pure geometry: ink-aware tight stacking,
-//                 blocks centered beside the divider, divider content-matched,
-//                 whole composition centered on the board.
+//   'layout'    - Perfect-it. NEVER touches a text size, and NEVER moves a
+//                 hand-placed element off its spot ("let me place it where i
+//                 want - anything - but make sure its aligned correctly").
+//                 Takes what the user set and does pure geometry around it:
+//                 ink-aware tight stacking, blocks centered beside the
+//                 divider, divider content-matched, alignment laws anchored
+//                 on the user's placements.
 //   'canonical' - Sign Bot. Also sizes the text, using roles trained on the
 //                 real production files, then tamed per LAW 18 (label ~0.85
 //                 above a 1.45 number, names 1.0, numbers capped at 24% of
@@ -140,6 +143,9 @@ const blockUnits = (lines: Measured[]) => (lines.length ? Math.max(...lines.map(
  */
 function unifyAxes(design: Design, patches: Record<string, ElPatch>): void {
   const ids = design.elements.filter((e) => e.kind === 'text' && patches[e.id]).map((e) => e.id)
+  // hand-placed elements are the anchors: a cluster snaps to where the USER
+  // put things, never pulls the user's element toward an engine position
+  const anchors = new Set(design.elements.filter((e) => e.kind === 'text' && e.placed).map((e) => e.id))
   for (const axis of ['y', 'x'] as const) {
     const items = ids
       .map((id) => ({ id, v: patches[id][axis], hh: patches[id].heightMm ?? 20 }))
@@ -150,7 +156,10 @@ function unifyAxes(design: Design, patches: Record<string, ElPatch>): void {
       let j = i
       while (j + 1 < items.length && items[j + 1].v - items[j].v <= Math.max(5, 0.3 * Math.min(items[j].hh, items[j + 1].hh))) j++
       if (j > i) {
-        const mean = r1(items.slice(i, j + 1).reduce((a, b) => a + b.v, 0) / (j - i + 1))
+        const cluster = items.slice(i, j + 1)
+        const src = cluster.filter((it) => anchors.has(it.id))
+        const from = src.length ? src : cluster
+        const mean = r1(from.reduce((a, b) => a + b.v, 0) / from.length)
         for (let k = i; k <= j; k++) patches[items[k].id][axis] = mean
       }
       i = j + 1
@@ -241,6 +250,11 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   const { patches, stacks, rows } = await arrangeCore(design, mode, heightOverride)
   if (mode !== 'layout') {
     unifyAxes(design, patches)
+    // the bot re-designs from scratch: its placements are not the user's hand,
+    // so hand-placement flags reset with it
+    for (const el of design.elements) {
+      if (el.kind === 'text' && patches[el.id]) patches[el.id].placed = false
+    }
     return patches
   }
   // Understand the user's mind: an element sitting CLOSE to its ideal spot was
@@ -253,18 +267,54 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   const byId = new Map(design.elements.map((e) => [e.id, e]))
   const inStack = new Set(stacks.flat())
   const inRow = new Set(rows.flat())
+  const isPlaced = (id: string) => {
+    const el = byId.get(id)
+    return el?.kind === 'text' && !!el.placed
+  }
+  // members of a stack/row that contains a hand-placed anchor: their position
+  // comes purely from the anchor translation below - per-element nudge keeps
+  // must not fight it, or the group settles differently on the next pass
+  const anchorFollowers = new Set(
+    [...stacks, ...rows].filter((g) => g.some(isPlaced)).flat(),
+  )
 
   for (const el of design.elements) {
     if (el.kind === 'divider') continue // divider position is law (bolt axis, content flush)
     const p = patches[el.id]
     if (!p || p.x === undefined || p.y === undefined) continue
+    if (anchorFollowers.has(el.id) && !el.placed) continue
+    // PLACEMENT SOVEREIGNTY (the owner: "let me place it where i want -
+    // anything - but make sure its aligned correctly"): a hand-placed element
+    // is FINAL, any distance. Alone it keeps its exact spot; in a stack/row
+    // the whole group translates onto it below, so the alignment laws still
+    // hold - anchored on the user's position, not the engine's.
+    if (el.placed) {
+      if (!inStack.has(el.id) && !inRow.has(el.id)) {
+        p.x = el.x
+        p.y = el.y
+      }
+      continue
+    }
     const dx = el.x - p.x
     const dy = el.y - p.y
     if (!inStack.has(el.id) && Math.abs(dx) <= NUDGE_KEEP && Math.abs(dy) <= NUDGE_KEEP) p.x = el.x
     if (!inRow.has(el.id) && Math.abs(dx) <= NUDGE_KEEP && Math.abs(dy) <= NUDGE_KEEP) p.y = el.y
   }
-  // LAW 12: a stack shares one X - keep the group's common sideways nudge
+  // LAW 12: a stack shares one X - keep the group's common sideways nudge.
+  // A hand-placed line anchors its whole column: the stack translates onto it
+  // (spacing and shared X intact), no distance cap.
   for (const group of stacks) {
+    const anchors = group.filter(isPlaced)
+    if (anchors.length) {
+      const adx = anchors.reduce((a, id) => a + ((byId.get(id)?.x ?? 0) - (patches[id]?.x ?? 0)), 0) / anchors.length
+      const ady = anchors.reduce((a, id) => a + ((byId.get(id)?.y ?? 0) - (patches[id]?.y ?? 0)), 0) / anchors.length
+      for (const id of group) {
+        const p = patches[id]
+        if (p && p.x !== undefined) p.x = r1(p.x + adx)
+        if (p && p.y !== undefined) p.y = r1(p.y + ady)
+      }
+      continue
+    }
     const deltas = group.map((id) => (byId.get(id)?.x ?? 0) - (patches[id]?.x ?? 0))
     const common = deltas.reduce((a, b) => a + b, 0) / deltas.length
     const shift = Math.abs(common) <= NUDGE_KEEP ? common : 0
@@ -273,8 +323,23 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
       if (p && p.x !== undefined) p.x = r1(p.x + shift)
     }
   }
-  // LAW 13: a row shares one Y - keep the group's common vertical nudge
+  // LAW 13: a row shares one Y - keep the group's common vertical nudge.
+  // A hand-placed member anchors the row's Y and keeps its own X exactly.
   for (const group of rows) {
+    const anchors = group.filter(isPlaced)
+    if (anchors.length) {
+      const ady = anchors.reduce((a, id) => a + ((byId.get(id)?.y ?? 0) - (patches[id]?.y ?? 0)), 0) / anchors.length
+      for (const id of group) {
+        const p = patches[id]
+        if (p && p.y !== undefined) p.y = r1(p.y + ady)
+      }
+      for (const id of anchors) {
+        const p = patches[id]
+        const el = byId.get(id)
+        if (p && el) p.x = el.x
+      }
+      continue
+    }
     const deltas = group.map((id) => (byId.get(id)?.y ?? 0) - (patches[id]?.y ?? 0))
     const common = deltas.reduce((a, b) => a + b, 0) / deltas.length
     const shift = Math.abs(common) <= NUDGE_KEEP ? common : 0

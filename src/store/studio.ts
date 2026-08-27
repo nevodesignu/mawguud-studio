@@ -347,6 +347,7 @@ export const useStudio = create<StudioState>((set, get) => ({
         if (ids.includes(el.id)) {
           el.x = Math.round((el.x + dx) * 10) / 10
           el.y = Math.round((el.y + dy) * 10) / 10
+          if (el.kind === 'text') el.placed = true // a hand placement is final
         }
       }
     })
@@ -387,6 +388,7 @@ export const useStudio = create<StudioState>((set, get) => ({
         if (!selectedIds.includes(el.id)) continue
         if (op === 'board-h' || op === 'match-x') el.x = Math.round(targetX * 10) / 10
         if (op === 'board-v' || op === 'match-y') el.y = Math.round(targetY * 10) / 10
+        if (el.kind === 'text') el.placed = true
       }
     })
   },
@@ -400,7 +402,10 @@ export const useStudio = create<StudioState>((set, get) => ({
     get().mutate((d) => {
       for (const el of d.elements) {
         const t = targets.get(el.id)
-        if (t !== undefined) el.y = Math.round(t * 10) / 10
+        if (t !== undefined) {
+          el.y = Math.round(t * 10) / 10
+          if (el.kind === 'text') el.placed = true
+        }
       }
     })
   },

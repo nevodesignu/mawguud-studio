@@ -253,6 +253,82 @@ async function sizingSovereignty() {
   assert(Math.abs(villaH - handSized) < 0.11, label, `hand-resized size was overridden: ${handSized} -> ${villaH}`)
 }
 
+/**
+ * PLACEMENT SOVEREIGNTY (owner 2026-08-27: "just let me place it where i want
+ * anything but make sure its alginened correctly override law"): a hand-placed
+ * element (placed flag, set on any drag/arrow/X-Y edit) is FINAL at any
+ * distance. Its stack translates onto it with spacing intact, alignment laws
+ * anchor on the user's position, untouched elements still get placed properly,
+ * and the bot's canonical pass resets the flags (bot placements are not the
+ * user's hand).
+ */
+async function placementSovereignty() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('psov', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
+  const t = (txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  const apply = async (mode: 'layout' | 'canonical') => {
+    const patches = await arrangeDesign(design, { mode })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  }
+  const label = 'PLACEMENT SOVEREIGNTY'
+  await apply('canonical')
+  assert(design.elements.every((e) => e.kind !== 'text' || !e.placed), label, 'bot output left placed flags set')
+
+  // drag the bottom name line FAR off - way beyond any nudge threshold
+  const dropX = t('اسلام').x - 62
+  const dropY = t('اسلام').y + 28
+  const partnerIdealDX = t('م/يحيي').x - t('اسلام').x
+  const partnerIdealDY = t('م/يحيي').y - t('اسلام').y
+  t('اسلام').x = dropX
+  t('اسلام').y = dropY
+  t('اسلام').placed = true
+  await apply('layout')
+  assert(Math.abs(t('اسلام').x - dropX) < 0.11 && Math.abs(t('اسلام').y - dropY) < 0.11, label, `hand placement overridden: (${dropX},${dropY}) -> (${t('اسلام').x},${t('اسلام').y})`)
+  // its stack partner follows: shares the X (law 12) and keeps the stack spacing
+  // shared X is exact (law 12); the stack gap re-derives from ink extents, so
+  // it may settle a few mm off the canonical snapshot (which law 14 had tweaked)
+  assert(Math.abs(t('م/يحيي').x - t('اسلام').x - partnerIdealDX) < 0.25, label, `stack did not follow in X: partner at ${t('م/يحيي').x} vs anchor ${t('اسلام').x}`)
+  assert(Math.abs(t('م/يحيي').y - t('اسلام').y - partnerIdealDY) < 5, label, `stack spacing broken: dy=${(t('م/يحيي').y - t('اسلام').y).toFixed(1)} vs ideal ${partnerIdealDY.toFixed(1)}`)
+  // idempotence: a second Perfect-it changes nothing
+  const snapX = t('اسلام').x
+  const snapPartnerY = t('م/يحيي').y
+  await apply('layout')
+  assert(Math.abs(t('اسلام').x - snapX) < 0.11 && Math.abs(t('م/يحيي').y - snapPartnerY) < 0.11, label, 'not idempotent under placed flags')
+
+  // a lone hand-placed number keeps its exact spot while the untouched name is still engine-placed
+  const sp2: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 250, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'corners', divThick: 2.85 }
+  const d2 = makeDesign('psov2', signFromSpec(sp2), botElements(sp2, [['34'], ['المهندس عبيد محمد']]))
+  const t2 = (txt: string) => d2.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  const apply2 = async (mode: 'layout' | 'canonical') => {
+    const patches = await arrangeDesign(d2, { mode })
+    for (const el of d2.elements) Object.assign(el, patches[el.id] ?? {})
+  }
+  await apply2('canonical')
+  t2('34').x = 95
+  t2('34').y = 52
+  t2('34').placed = true
+  await apply2('layout')
+  assert(Math.abs(t2('34').x - 95) < 0.11 && Math.abs(t2('34').y - 52) < 0.11, label, `lone placed number moved: (${t2('34').x},${t2('34').y})`)
+  assert(Math.abs(t2('المهندس عبيد محمد').x - 200) < 1, label, `untouched name no longer centered: x=${t2('المهندس عبيد محمد').x}`)
+
+  // law 14 anchors on the user: an unplaced line lands NEAR a placed one -> it
+  // snaps to the USER's axis, the user's element does not move
+  const d3 = makeDesign('psov3', signFromSpec(sp), botElements(sp, [['أحمد', 'محمود'], ['منى', 'سارة']]))
+  const t3 = (txt: string) => d3.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  const apply3 = async (mode: 'layout' | 'canonical') => {
+    const patches = await arrangeDesign(d3, { mode })
+    for (const el of d3.elements) Object.assign(el, patches[el.id] ?? {})
+  }
+  await apply3('canonical')
+  const userY = t3('أحمد').y - 4 // user parks their line just off the partner's row
+  t3('أحمد').y = userY
+  t3('أحمد').x = t3('أحمد').x - 3
+  t3('أحمد').placed = true
+  await apply3('layout')
+  assert(Math.abs(t3('أحمد').y - userY) < 0.11, label, `law 14 moved the user's element: ${userY} -> ${t3('أحمد').y}`)
+  assert(Math.abs(t3('منى').y - userY) < 0.11, label, `law 14 did not snap to the user's axis: ${t3('منى').y} vs ${userY}`)
+}
+
 /** Nudge preservation: a small deliberate move survives Perfect-it; a large one snaps. */
 async function nudgeKeep() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
@@ -520,6 +596,7 @@ async function main() {
   }
   await goldenMaster()
   await sizingSovereignty()
+  await placementSovereignty()
   await nudgeKeep()
   await boltAxisLaw()
   await law11BigText()

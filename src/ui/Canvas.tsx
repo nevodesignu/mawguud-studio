@@ -446,6 +446,7 @@ export function Canvas() {
             if (st) {
               el.x = Math.round((st.x + dx) * 10) / 10
               el.y = Math.round((st.y + dy) * 10) / 10
+              if (el.kind === 'text') el.placed = true // a hand placement is final
             }
           }
         },

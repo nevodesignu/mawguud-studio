@@ -24,6 +24,7 @@ export interface TextEl {
   fontId: string
   heightMm: number // height of a standard tall letter (alef/H)
   sized?: boolean // true once the USER set the size by hand - then it is final
+  placed?: boolean // true once the USER moved it by hand - the position is final too
   x: number // centre of ink bbox
   y: number
   spacingEm: number // extra tracking, fraction of em (never applied inside Arabic joins)
