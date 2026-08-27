@@ -114,6 +114,7 @@ let past: Design[] = []
 let future: Design[] = []
 let gestureSnapshot: Design | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+let saveInFlight: Promise<unknown> | null = null
 let finalizeToken = 0
 // element clipboard - survives switching designs
 let clipboard: El[] = []
@@ -135,7 +136,12 @@ async function doSave(get: () => StudioState, set: (p: Partial<StudioState>) => 
   saveTimer = null
   const d = get().design
   d.updatedAt = Date.now()
-  await saveDesign(d)
+  saveInFlight = saveDesign(d)
+  try {
+    await saveInFlight
+  } finally {
+    saveInFlight = null
+  }
   set({ saved: true })
   void get().refreshDesigns()
 }
@@ -530,7 +536,19 @@ export const useStudio = create<StudioState>((set, get) => ({
       const raws: MultiPoly[] = []
       for (const el of design.elements) {
         try {
-          raws.push(await rawGeometryOf(el))
+          const raw = await rawGeometryOf(el)
+          // a text that shapes to NOTHING (corrupt font, empty coverage) must
+          // never vanish silently from the machine file
+          if (el.kind === 'text' && el.text.trim() && raw.length === 0) {
+            warnings.push(`"${el.text.slice(0, 16)}" produced NO geometry - its font may be corrupt. It is MISSING from the cut file.`)
+          }
+          if (el.kind === 'text' && el.text.trim()) {
+            const shaped = await shapedAsync(el.fontId, el.text, el.spacingEm)
+            if (shaped.notdefs > 0) {
+              warnings.push(`"${el.text.slice(0, 16)}": its font is missing ${shaped.notdefs} letter${shaped.notdefs === 1 ? '' : 's'} of this text - boxes will be cut instead. Pick a font that covers it.`)
+            }
+          }
+          raws.push(raw)
         } catch (err) {
           console.error('element failed', el, err)
           warnings.push(`Element ${elLabel(el)} could not be processed - is its font still installed?`)
@@ -609,12 +627,14 @@ export const useStudio = create<StudioState>((set, get) => ({
   },
   deleteDesign: async (id) => {
     if (id === get().design.id) {
-      // deleting the open design: drop its pending autosave so it stays deleted,
-      // and move the editor to a fresh blank
+      // deleting the open design: drop its pending autosave AND wait out any
+      // save already in flight so it stays deleted - a PUT landing after the
+      // DELETE would resurrect the file as a zombie
       if (saveTimer) {
         clearTimeout(saveTimer)
         saveTimer = null
       }
+      if (saveInFlight) await saveInFlight.catch(() => {})
       await deleteDesignById(id)
       startFresh(set, makeBlank())
       set({ saved: true })

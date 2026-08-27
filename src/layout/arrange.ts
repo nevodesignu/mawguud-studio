@@ -41,11 +41,13 @@ interface Measured {
 const LABEL_RE =
   /^(شقة|شقه|فيلا|عمارة|عماره|دور|مكتب|محل|عيادة|عياده|رقم|بدروم|villa|apt\.?|apartment|flat|office|floor|shop|unit|no\.?|bezmnt|basement)$/i
 
-// LAW 18: the number leads the sign but never dwarfs it. The raw production
-// files ran numbers at 2.0x a name / 30% of board height - the owner called
-// that "super huge". 1.45x + the 24% NUMBER_CAP keeps the number the first
-// thing you find without turning the sign into a parking plate.
-const RATIO: Record<'name' | 'number' | 'label', number> = { name: 1.0, number: 1.45, label: 0.85 }
+// LAW 18: the number leads the sign but never dwarfs it - the owner called
+// the raw production ratio "super huge" and a judge panel picked the tamed
+// look. NOTE the values were re-expressed 2026-08-27 when the Century Gothic
+// reference-height bug was fixed (heightMm now means TRUE letter height):
+// 1.65x/27.5% renders the exact same physical look the owner approved as the
+// old buggy-metric 1.45x/24%.
+const RATIO: Record<'name' | 'number' | 'label', number> = { name: 1.0, number: 1.65, label: 0.85 }
 const STACK_GAP = 0.18 // ink gap between lines, fraction of mean line height
 // LAW 11: text as big as possible on every sign - but readable, never bloated.
 // The fills push size up; NUMBER_CAP / LINE_CAP are the "not too big" guards.
@@ -55,7 +57,7 @@ const DIV_GAP_X = 0.045 // gap between divider and each block, fraction of W
 const DIV_GAP_Y = 0.05 // for horizontal dividers, fraction of H
 const MAX_ROW_GAP = 0.12 // LAW 20: villa-row middle gap cap, fraction of W
 const LINE_CAP = 0.4
-const NUMBER_CAP = 0.24
+const NUMBER_CAP = 0.275
 
 export type ArrangeMode = 'layout' | 'canonical'
 
@@ -499,7 +501,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     // letter|number mode (canonical sizing only): equal size on one row
     const shortSingle = (g: Measured[]) => g.length === 1 && g[0].el.text.trim().length <= 4
     const oneRow = mode === 'canonical' && shortSingle(right) && shortSingle(left)
-    const cols: Measured[][] = oneRow ? [right, left].map((g) => g.map((m) => ({ ...m, unit: 1.45 }))) : [right, left]
+    const cols: Measured[][] = oneRow ? [right, left].map((g) => g.map((m) => ({ ...m, unit: 1.65 }))) : [right, left]
     const [R, L] = cols
 
     const gapX = DIV_GAP_X * w
@@ -557,7 +559,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       (mode === 'canonical' || sideBySide)
 
     if (topRowPair) {
-      const rowUnit = 1.4
+      const rowUnit = 1.6
       const row = mode === 'canonical' ? top.map((m) => ({ ...m, unit: rowUnit })) : top
       const num = row.find((m) => m.role === 'number')!
       const other = row.find((m) => m.role !== 'number')!

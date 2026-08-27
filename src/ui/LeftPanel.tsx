@@ -144,7 +144,12 @@ function Fonts() {
         onChange={async (e) => {
           const files = e.target.files
           if (!files) return
-          for (const f of Array.from(files)) await addUploadedFont(f)
+          for (const f of Array.from(files)) {
+            const meta = await addUploadedFont(f)
+            // re-uploading a corrected font under the same name must not keep
+            // shaping (and EXPORTING) with the stale cached bytes
+            evictFont(meta.id)
+          }
           e.target.value = ''
           await refresh()
         }}
@@ -160,6 +165,7 @@ function Fonts() {
               className="icon danger"
               title="Remove font"
               onClick={async () => {
+                if (!window.confirm(`Delete the font "${f.name}"? Any saved design using it will stop rendering until you re-upload it.`)) return
                 await removeUploadedFont(f.id)
                 evictFont(f.id)
                 await refresh()

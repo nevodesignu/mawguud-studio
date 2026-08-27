@@ -1,7 +1,8 @@
-// PDF-compatible .ai writer. 1:1 scale: the page is exactly the sign size in mm.
-// Default style matches Mawguud's own production templates (measured from their
-// .ai files): everything in near-black #231F20, 1pt strokes, letter shapes
-// filled. A red-hairline style is available for laser softwares that expect it.
+// PDF-compatible .ai writer. 1:1 scale: the page is exactly the sign size in mm
+// (expressed in PDF points, 72/25.4 per mm - true physical size everywhere).
+// Default style matches Mawguud's own production templates: black strokes,
+// letter shapes filled. A red-hairline style is available for laser softwares
+// that expect it.
 // Input geometry is design space (mm, y-down); this writer flips to PDF y-up.
 import type { MultiPoly } from '../geom/types'
 
@@ -43,7 +44,7 @@ export interface AiDocInput {
   wMm: number
   hMm: number
   cutLines: MultiPoly // stroked only (panel outline, bolt holes)
-  shapes: MultiPoly // filled + stroked (letters, dividers) - even-odd fill
+  shapes: MultiPoly // filled + stroked (letters, dividers) - NONZERO fill: holes must be wound opposite their exterior (polygon-clipping convention) or they fill solid
   style?: AiStyle
 }
 

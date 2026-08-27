@@ -59,7 +59,11 @@ function fileStore(): Plugin {
           } catch {
             return sendJson(res, 400, { error: 'bad json' })
           }
-          fs.writeFileSync(file, body)
+          // atomic: a crash mid-write must never truncate a customer's design
+          // file - write beside it, then rename over it
+          const tmp = `${file}.tmp`
+          fs.writeFileSync(tmp, body)
+          fs.renameSync(tmp, file)
           return sendJson(res, 200, { ok: true })
         }
         if (req.method === 'DELETE') {

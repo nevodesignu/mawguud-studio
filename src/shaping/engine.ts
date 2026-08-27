@@ -47,6 +47,11 @@ export function loadFont(id: string, data: ArrayBuffer): LoadedFont {
     let minY = Infinity
     let maxY = -Infinity
     for (const g of self.shapeRun(text, false)) {
+      // gid 0 is .notdef: a Latin-only font "shapes" an alef into the notdef
+      // BOX, whose ink is taller than a real letter - measuring it silently
+      // inflated every Century Gothic line ~15% past its nominal heightMm in
+      // the CUT FILE. A reference letter must be a real glyph or nothing.
+      if (g.g === 0) continue
       for (const ring of flattenCmds(self.glyphCmds(g.g), upem / 50)) {
         for (const [, y] of ring) {
           if (y < minY) minY = y
@@ -157,6 +162,7 @@ export interface ShapedText {
   bbox: BBox // ink bbox in font units, y-up
   advance: number
   refHeight: number // the font's reference line height (alef/H), font units
+  notdefs: number // glyphs the font is MISSING for this text (.notdef boxes)
 }
 
 /**
@@ -168,11 +174,13 @@ export function shapeLine(font: LoadedFont, text: string, letterSpacing = 0): Sh
   const { runs } = splitRuns(text)
   const glyphs: ShapedGlyph[] = []
   let pen = 0
+  let notdefs = 0
   for (let r = 0; r < runs.length; r++) {
     const run = runs[r]
     const shaped = font.shapeRun(run.text, run.rtl)
     for (let i = 0; i < shaped.length; i++) {
       const g = shaped[i]
+      if (g.g === 0) notdefs++
       const cmds = font.glyphCmds(g.g)
       if (cmds.length) glyphs.push({ cmds, x: pen + g.dx, y: g.dy })
       pen += g.ax
@@ -187,7 +195,7 @@ export function shapeLine(font: LoadedFont, text: string, letterSpacing = 0): Sh
       for (const [x, y] of ring) growBBox(bbox, x + g.x, y + g.y)
     }
   }
-  return { glyphs, upem: font.upem, bbox, advance: pen, refHeight: font.refHeight() }
+  return { glyphs, upem: font.upem, bbox, advance: pen, refHeight: font.refHeight(), notdefs }
 }
 
 /**

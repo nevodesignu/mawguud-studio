@@ -216,16 +216,19 @@ async function goldenMaster() {
   const label = 'GOLDEN شقة/20'
   const byText = (t: string) => design.elements.find((e) => e.kind === 'text' && e.text === t) as TextEl
   const near = (v: number, want: number, tol: number, what: string) => assert(Math.abs(v - want) <= tol, label, `${what}: ${v} (approved: ${want})`)
-  near(byText('م/يحيي').heightMm, 33.1, 0.5, 'name line height')
-  near(byText('اسلام').heightMm, 33.1, 0.5, 'name line height')
-  near(byText('شقة').heightMm, 28.1, 0.5, 'label height')
-  near(byText('20').heightMm, 48, 0.5, 'number height')
+  // re-baselined 2026-08-27 with the Century Gothic reference-height fix:
+  // the number's PHYSICAL size is unchanged (55mm true letter height ==
+  // the approved look) - heightMm just tells the truth now
+  near(byText('م/يحيي').heightMm, 33.3, 0.5, 'name line height')
+  near(byText('اسلام').heightMm, 33.3, 0.5, 'name line height')
+  near(byText('شقة').heightMm, 28.3, 0.5, 'label height')
+  near(byText('20').heightMm, 55, 0.5, 'number height')
   const d = design.elements.find((e) => e.kind === 'divider')
-  // content-matched divider follows the (now taller) name column; it sits
-  // between the columns wherever the content puts it (LAW 21 centers the
-  // whole GROUP, it never pins the divider itself)
-  if (d && d.kind === 'divider') near(d.length, 118.6, 2, 'divider length')
-  if (d && d.kind === 'divider') near(d.x, 177.9, 2, 'divider x (between the columns)')
+  // content-matched divider follows the name column; it sits between the
+  // columns wherever the content puts it (LAW 21 centers the whole GROUP,
+  // it never pins the divider itself)
+  if (d && d.kind === 'divider') near(d.length, 119.3, 2, 'divider length')
+  if (d && d.kind === 'divider') near(d.x, 177.3, 2, 'divider x (between the columns)')
 }
 
 /**
@@ -499,8 +502,10 @@ async function law16ReadingDirection() {
 /**
  * LAW 18: the number leads the sign but never dwarfs it (owner 2026-08-27:
  * "dont make numbers super huge just make it look good"). Bot numbers stay
- * within 1.45x the tallest name and 24% of the board height - and still
- * above the name, so the number keeps its find-me-first job.
+ * within 1.65x the tallest name and 27.5% of the board height (the same
+ * PHYSICAL look the judges approved as 1.45x/24% under the old buggy
+ * Century Gothic reference metric) - and still above the name, so the
+ * number keeps its find-me-first job.
  */
 async function law18NumberScale() {
   const cases: { sp: TemplateSpec; groups: string[][] }[] = [
@@ -519,10 +524,10 @@ async function law18NumberScale() {
     if (nums.length === 0) continue
     const num = Math.max(...nums.map((e) => e.heightMm))
     const label = `LAW 18 @${c.sp.layout} ${c.sp.w}x${c.sp.h}`
-    assert(num <= 0.24 * c.sp.h + 0.11, label, `number ${num}mm breaks the 24% cap on h=${c.sp.h}`)
+    assert(num <= 0.275 * c.sp.h + 0.11, label, `number ${num}mm breaks the 27.5% cap on h=${c.sp.h}`)
     if (names.length > 0) {
       const nameMax = Math.max(...names.map((e) => e.heightMm))
-      assert(num <= 1.45 * nameMax + 0.25, label, `number ${num}mm dwarfs the ${nameMax}mm name (>1.45x)`)
+      assert(num <= 1.65 * nameMax + 0.3, label, `number ${num}mm dwarfs the ${nameMax}mm name (>1.65x)`)
       assert(num >= nameMax, label, `number ${num}mm lost the lead to the ${nameMax}mm name`)
     }
   }
