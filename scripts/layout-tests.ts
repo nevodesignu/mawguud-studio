@@ -246,6 +246,18 @@ async function nudgeKeep() {
   assert(Math.abs(line.y - (nudgedY + 80)) > 5, 'NUDGE', 'large displacement was not re-placed')
 }
 
+/** Side bolts sit at mid-height: the horizontal divider must run on their axis. */
+async function boltAxisLaw() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 300, h: 150, boltDia: 6.5, boltInsetX: 15.3, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }
+  for (const mode of ['canonical', 'layout'] as const) {
+    const design = makeDesign('axis', signFromSpec(sp), botElements(sp, [['34'], ['المهندس عبيد محمد']]))
+    const patches = await arrangeDesign(design, { mode })
+    const d = design.elements.find((e) => e.kind === 'divider')!
+    const y = patches[d.id]?.y
+    assert(y !== undefined && Math.abs(y - 75) < 0.11, 'BOLT AXIS', `divider not on the bolt axis (${mode}): y=${y} vs 75`)
+  }
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -261,6 +273,7 @@ async function main() {
   await goldenMaster()
   await sizingSovereignty()
   await nudgeKeep()
+  await boltAxisLaw()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')

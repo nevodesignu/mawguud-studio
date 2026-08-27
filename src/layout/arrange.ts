@@ -117,6 +117,7 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   // An element far from ideal is asking to be placed properly.
   const NUDGE_KEEP = Math.max(8, 0.04 * Math.min(w, h))
   for (const el of design.elements) {
+    if (el.kind === 'divider') continue // divider position is law (bolt axis, content flush)
     const p = patchesRaw[el.id]
     if (!p || p.x === undefined || p.y === undefined) continue
     if (Math.hypot(el.x - p.x, el.y - p.y) <= NUDGE_KEEP) {
@@ -181,6 +182,9 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
     const top = measured.filter((m) => m.el.y < div.y).sort(byY)
     const bottom = measured.filter((m) => m.el.y >= div.y).sort(byY)
     const gapY = DIV_GAP_Y * h
+    // side bolts sit at mid-height: the line must run exactly on their axis
+    const boltAxis = design.sign.bolts && design.sign.boltPattern === 'sides'
+    const padY = ((1 - HEIGHT_FILL) / 2) * h
 
     // catalog Villa-row: a label + a number on top spread on ONE row
     const topRowPair =
@@ -215,11 +219,21 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
 
       const rowH = Math.max(...row.map((m) => H(m) * m.inkPerRef))
       const hB = stackExtent(bottom, H)
-      const total = rowH + gapY + div.thickness + (bottom.length ? gapY : 0) + hB
-      const y0 = (h - total) / 2
-      const cyRow = y0 + rowH / 2
-      const divY = y0 + rowH + gapY + div.thickness / 2
-      const cyB = divY + div.thickness / 2 + (bottom.length ? gapY : 0) + hB / 2
+      let cyRow: number
+      let divY: number
+      let cyB: number
+      if (boltAxis) {
+        // line locked to the bolt axis; blocks centered in their halves
+        divY = h / 2
+        cyRow = (padY + (divY - gapY)) / 2
+        cyB = (divY + gapY + (h - padY)) / 2
+      } else {
+        const total = rowH + gapY + div.thickness + (bottom.length ? gapY : 0) + hB
+        const y0 = (h - total) / 2
+        cyRow = y0 + rowH / 2
+        divY = y0 + rowH + gapY + div.thickness / 2
+        cyB = divY + div.thickness / 2 + (bottom.length ? gapY : 0) + hB / 2
+      }
 
       const xL = (w - CW) / 2
       const xR = (w + CW) / 2
@@ -248,11 +262,20 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
 
       const hT = stackExtent(top, H)
       const hB = stackExtent(bottom, H)
-      const total = hT + (top.length ? gapY : 0) + div.thickness + (bottom.length ? gapY : 0) + hB
-      const y0 = (h - total) / 2
-      const cyT = y0 + hT / 2
-      const divY = y0 + hT + (top.length ? gapY : 0) + div.thickness / 2
-      const cyB = y0 + hT + (top.length ? gapY : 0) + div.thickness + (bottom.length ? gapY : 0) + hB / 2
+      let cyT: number
+      let divY: number
+      let cyB: number
+      if (boltAxis) {
+        divY = h / 2
+        cyT = (padY + (divY - gapY)) / 2
+        cyB = (divY + gapY + (h - padY)) / 2
+      } else {
+        const total = hT + (top.length ? gapY : 0) + div.thickness + (bottom.length ? gapY : 0) + hB
+        const y0 = (h - total) / 2
+        cyT = y0 + hT / 2
+        divY = y0 + hT + (top.length ? gapY : 0) + div.thickness / 2
+        cyB = y0 + hT + (top.length ? gapY : 0) + div.thickness + (bottom.length ? gapY : 0) + hB / 2
+      }
 
       // exact content span: first letter to last letter of the widest block
       const divLen = Math.max(0.2 * w, blockWidth(top, H), blockWidth(bottom, H))
