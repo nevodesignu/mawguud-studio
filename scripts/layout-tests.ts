@@ -258,6 +258,43 @@ async function boltAxisLaw() {
   }
 }
 
+/** LAW 11: bot text is as big as possible - the name must fill most of the width. */
+async function law11BigText() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 100, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('big', signFromSpec(sp), botElements(sp, [['Villa', '34'], ['المهندس عبيد محمد']]))
+  const patches = await arrangeDesign(design, { mode: 'canonical' })
+  for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  const { texts } = await placed(design)
+  const name = texts.find((t) => t.el.text.includes('المهندس'))!
+  const span = name.right - name.left
+  assert(span >= 0.75 * 400, 'LAW 11', `name too small: spans ${span.toFixed(0)}mm of 400 (need >= 300)`)
+  assert(span <= 0.9 * 400, 'LAW 11', `name too big: spans ${span.toFixed(0)}mm of 400`)
+}
+
+/** LAW 12 + 13: stacked texts share X, side-by-side texts share Y - even through nudges. */
+async function alignmentLaws() {
+  // stacked: nudge one line sideways, the column must stay on one X
+  const lr: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 100, boltPattern: 'sides', divThick: 2.85 }
+  const d1 = makeDesign('l12', signFromSpec(lr), botElements(lr, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
+  const apply = async (design: Design, mode: 'layout' | 'canonical') => {
+    const patches = await arrangeDesign(design, { mode })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  }
+  await apply(d1, 'canonical')
+  const t = (design: Design, txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  t(d1, 'اسلام').x += 5
+  await apply(d1, 'layout')
+  assert(Math.abs(t(d1, 'م/يحيي').x - t(d1, 'اسلام').x) < 0.11, 'LAW 12', `stacked lines split X: ${t(d1, 'م/يحيي').x} vs ${t(d1, 'اسلام').x}`)
+
+  // row: nudge the number down a bit, the row must stay on one Y
+  const ud: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 100, boltPattern: 'corners', divThick: 2.85 }
+  const d2 = makeDesign('l13', signFromSpec(ud), botElements(ud, [['Villa', '34'], ['المهندس عبيد محمد']]))
+  await apply(d2, 'canonical')
+  t(d2, '34').y -= 4
+  await apply(d2, 'layout')
+  assert(Math.abs(t(d2, 'Villa').y - t(d2, '34').y) < 0.11, 'LAW 13', `row split Y: ${t(d2, 'Villa').y} vs ${t(d2, '34').y}`)
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -274,6 +311,8 @@ async function main() {
   await sizingSovereignty()
   await nudgeKeep()
   await boltAxisLaw()
+  await law11BigText()
+  await alignmentLaws()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')

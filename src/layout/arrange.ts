@@ -33,8 +33,10 @@ const LABEL_RE =
 
 const RATIO: Record<'name' | 'number' | 'label', number> = { name: 1.0, number: 2.0, label: 0.85 }
 const STACK_GAP = 0.18 // ink gap between lines, fraction of mean line height
-const WIDTH_FILL = 0.78 // canonical ensemble width target
-const HEIGHT_FILL = 0.74 // canonical ensemble height cap
+// LAW 11: text as big as possible on every sign - but readable, never bloated.
+// The fills push size up; NUMBER_CAP / LINE_CAP are the "not too big" guards.
+const WIDTH_FILL = 0.84 // canonical ensemble width target
+const HEIGHT_FILL = 0.78 // canonical ensemble height cap
 const DIV_GAP_X = 0.045 // gap between divider and each block, fraction of W
 const DIV_GAP_Y = 0.05 // for horizontal dividers, fraction of H
 const LINE_CAP = 0.4
@@ -82,8 +84,9 @@ function stackExtent(lines: Measured[], H: HeightOf): number {
 const blockWidth = (lines: Measured[], H: HeightOf) => (lines.length ? Math.max(...lines.map((m) => m.aspect * H(m))) : 0)
 
 /** Place one stack centered at (cx, cy) - spacing by ink extents. */
-function placeStack(lines: Measured[], H: HeightOf, cx: number, cy: number, patches: Record<string, ElPatch>): void {
+function placeStack(lines: Measured[], H: HeightOf, cx: number, cy: number, patches: Record<string, ElPatch>, stacks?: string[][]): void {
   if (lines.length === 0) return
+  if (stacks && lines.length > 1) stacks.push(lines.map((m) => m.el.id))
   const hs = lines.map(H)
   const mean = hs.reduce((a, b) => a + b, 0) / hs.length
   const gap = STACK_GAP * mean
@@ -110,25 +113,60 @@ const blockUnits = (lines: Measured[]) => (lines.length ? Math.max(...lines.map(
 export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Promise<Record<string, ElPatch>> {
   const mode: ArrangeMode = opts.mode ?? 'layout'
   const { w, h } = design.sign
-  const patchesRaw = await arrangeCore(design, mode)
-  if (mode !== 'layout') return patchesRaw
+  const { patches, stacks, rows } = await arrangeCore(design, mode)
+  if (mode !== 'layout') return patches
   // Understand the user's mind: an element sitting CLOSE to its ideal spot was
   // deliberately nudged there ("a bit upward, slightly to the side") - keep it.
-  // An element far from ideal is asking to be placed properly.
+  // An element far from ideal is asking to be placed properly. Alignment laws
+  // survive nudging: stacked texts always share X (a sideways nudge moves the
+  // whole column), side-by-side texts always share Y (a vertical nudge moves
+  // the whole row).
   const NUDGE_KEEP = Math.max(8, 0.04 * Math.min(w, h))
+  const byId = new Map(design.elements.map((e) => [e.id, e]))
+  const inStack = new Set(stacks.flat())
+  const inRow = new Set(rows.flat())
+
   for (const el of design.elements) {
     if (el.kind === 'divider') continue // divider position is law (bolt axis, content flush)
-    const p = patchesRaw[el.id]
+    const p = patches[el.id]
     if (!p || p.x === undefined || p.y === undefined) continue
-    if (Math.hypot(el.x - p.x, el.y - p.y) <= NUDGE_KEEP) {
-      p.x = el.x
-      p.y = el.y
+    const dx = el.x - p.x
+    const dy = el.y - p.y
+    if (!inStack.has(el.id) && Math.abs(dx) <= NUDGE_KEEP && Math.abs(dy) <= NUDGE_KEEP) p.x = el.x
+    if (!inRow.has(el.id) && Math.abs(dx) <= NUDGE_KEEP && Math.abs(dy) <= NUDGE_KEEP) p.y = el.y
+  }
+  // LAW 12: a stack shares one X - keep the group's common sideways nudge
+  for (const group of stacks) {
+    const deltas = group.map((id) => (byId.get(id)?.x ?? 0) - (patches[id]?.x ?? 0))
+    const common = deltas.reduce((a, b) => a + b, 0) / deltas.length
+    const shift = Math.abs(common) <= NUDGE_KEEP ? common : 0
+    for (const id of group) {
+      const p = patches[id]
+      if (p && p.x !== undefined) p.x = r1(p.x + shift)
     }
   }
-  return patchesRaw
+  // LAW 13: a row shares one Y - keep the group's common vertical nudge
+  for (const group of rows) {
+    const deltas = group.map((id) => (byId.get(id)?.y ?? 0) - (patches[id]?.y ?? 0))
+    const common = deltas.reduce((a, b) => a + b, 0) / deltas.length
+    const shift = Math.abs(common) <= NUDGE_KEEP ? common : 0
+    for (const id of group) {
+      const p = patches[id]
+      if (p && p.y !== undefined) p.y = r1(p.y + shift)
+    }
+  }
+  return patches
 }
 
-async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<string, ElPatch>> {
+interface ArrangeResult {
+  patches: Record<string, ElPatch>
+  stacks: string[][] // vertical groups - members share X
+  rows: string[][] // horizontal groups - members share Y
+}
+
+async function arrangeCore(design: Design, mode: ArrangeMode): Promise<ArrangeResult> {
+  const stacks: string[][] = []
+  const rows: string[][] = []
   const { w, h } = design.sign
   const patches: Record<string, ElPatch> = {}
   const texts = design.elements.filter((e): e is TextEl => e.kind === 'text' && e.text.trim().length > 0)
@@ -145,8 +183,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
     // letter|number mode (canonical sizing only): equal size on one row
     const shortSingle = (g: Measured[]) => g.length === 1 && g[0].el.text.trim().length <= 4
     const oneRow = mode === 'canonical' && shortSingle(right) && shortSingle(left)
-    const rows: Measured[][] = oneRow ? [right, left].map((g) => g.map((m) => ({ ...m, unit: 2.0 }))) : [right, left]
-    const [R, L] = rows
+    const cols: Measured[][] = oneRow ? [right, left].map((g) => g.map((m) => ({ ...m, unit: 2.0 }))) : [right, left]
+    const [R, L] = cols
 
     const gapX = DIV_GAP_X * w
     let H: HeightOf
@@ -175,8 +213,9 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
     // the divider always tracks the content beside it (both modes)
     const divLen = clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
     patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(divLen) }
-    placeStack(R, H, cxR, h / 2, patches)
-    placeStack(L, H, cxL, h / 2, patches)
+    placeStack(R, H, cxR, h / 2, patches, stacks)
+    placeStack(L, H, cxL, h / 2, patches, stacks)
+    if (oneRow && R.length && L.length) rows.push([R[0].el.id, L[0].el.id])
   } else if (div) {
     // ---- Up | Down (wide) and Vertical (tall) ----
     const top = measured.filter((m) => m.el.y < div.y).sort(byY)
@@ -244,7 +283,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
       // the line runs exactly from the first letter to the last letter of the
       // widest adjacent content - never past it
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(Math.max(CW, blockWidth(bottom, H))) }
-      placeStack(bottom, H, w / 2, cyB, patches)
+      placeStack(bottom, H, w / 2, cyB, patches, stacks)
+      rows.push([leftM.el.id, rightM.el.id])
     } else {
       let H: HeightOf
       if (mode === 'layout') {
@@ -280,8 +320,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
       // exact content span: first letter to last letter of the widest block
       const divLen = Math.max(0.2 * w, blockWidth(top, H), blockWidth(bottom, H))
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(divLen) }
-      placeStack(top, H, w / 2, cyT, patches)
-      placeStack(bottom, H, w / 2, cyB, patches)
+      placeStack(top, H, w / 2, cyT, patches, stacks)
+      placeStack(bottom, H, w / 2, cyB, patches, stacks)
     }
   } else {
     // ---- no divider: one centered stack ----
@@ -291,15 +331,15 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
       if (mode === 'layout') {
         H = userHeights
       } else {
-        let s = (0.65 * h) / stackUnits(lines)
+        let s = (0.72 * h) / stackUnits(lines)
         for (const m of lines) {
-          s = Math.min(s, (0.72 * w) / (m.aspect * ratioOf(m)))
+          s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
           s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
         }
         H = scaled(s)
       }
-      placeStack(lines, H, w / 2, h / 2, patches)
+      placeStack(lines, H, w / 2, h / 2, patches, stacks)
     }
   }
-  return patches
+  return { patches, stacks, rows }
 }
