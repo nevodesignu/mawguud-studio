@@ -171,8 +171,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
     const divX = x0 + wL + (L.length ? gapX : 0) + div.thickness / 2
     const cxR = x0 + wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR / 2
 
-    // divider length is sizing: the user's value rules in layout mode
-    const divLen = mode === 'layout' ? div.length : clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
+    // the divider always tracks the content beside it (both modes)
+    const divLen = clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
     patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(divLen) }
     placeStack(R, H, cxR, h / 2, patches)
     placeStack(L, H, cxL, h / 2, patches)
@@ -194,7 +194,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
       const num = row.find((m) => m.role === 'number')!
       const other = row.find((m) => m.role !== 'number')!
       const labelRight = hasArabic(other.el.text)
-      const CW = mode === 'canonical' ? WIDTH_FILL * w : Math.max(WIDTH_FILL * w, blockWidth(bottom, userHeights))
+      const CW = WIDTH_FILL * w
       const midGap = 0.06 * w
 
       let H: HeightOf
@@ -227,7 +227,9 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
       const rightM = labelRight ? other : num
       patches[leftM.el.id] = { x: r1(xL + (leftM.aspect * H(leftM)) / 2), y: r1(cyRow), heightMm: r1(H(leftM)) }
       patches[rightM.el.id] = { x: r1(xR - (rightM.aspect * H(rightM)) / 2), y: r1(cyRow), heightMm: r1(H(rightM)) }
-      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(mode === 'layout' ? div.length : CW) }
+      // the line runs exactly from the first letter to the last letter of the
+      // widest adjacent content - never past it
+      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(Math.max(CW, blockWidth(bottom, H))) }
       placeStack(bottom, H, w / 2, cyB, patches)
     } else {
       let H: HeightOf
@@ -252,7 +254,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<st
       const divY = y0 + hT + (top.length ? gapY : 0) + div.thickness / 2
       const cyB = y0 + hT + (top.length ? gapY : 0) + div.thickness + (bottom.length ? gapY : 0) + hB / 2
 
-      const divLen = mode === 'layout' ? div.length : clamp(Math.max(blockWidth(top, H), blockWidth(bottom, H)) * 1.05, 0.3 * w, 0.85 * w)
+      // exact content span: first letter to last letter of the widest block
+      const divLen = Math.max(0.2 * w, blockWidth(top, H), blockWidth(bottom, H))
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(divLen) }
       placeStack(top, H, w / 2, cyT, patches)
       placeStack(bottom, H, w / 2, cyB, patches)
