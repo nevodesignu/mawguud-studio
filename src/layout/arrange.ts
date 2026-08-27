@@ -137,13 +137,13 @@ function unifyAxes(design: Design, patches: Record<string, ElPatch>): void {
  * be equal - unify them UP to the biggest (sizes stay sovereign when clearly
  * different, and nothing ever shrinks).
  */
-function unifySizes(design: Design): Map<string, number> {
-  const unified = new Map<string, number>()
-  const classes: Record<string, { id: string; hh: number }[]> = {}
+function unifySizes(design: Design): Map<string, { h: number; final: boolean }> {
+  const unified = new Map<string, { h: number; final: boolean }>()
+  const classes: Record<string, { id: string; hh: number; sized: boolean }[]> = {}
   for (const el of design.elements) {
     if (el.kind !== 'text' || !el.text.trim()) continue
     const role = isNumberLine(el.text) ? 'number' : LABEL_RE.test(el.text.trim()) ? 'label' : 'name'
-    ;(classes[role] ??= []).push({ id: el.id, hh: Math.max(1, el.heightMm) })
+    ;(classes[role] ??= []).push({ id: el.id, hh: Math.max(1, el.heightMm), sized: !!el.sized })
   }
   for (const group of Object.values(classes)) {
     group.sort((a, b) => a.hh - b.hh)
@@ -151,8 +151,12 @@ function unifySizes(design: Design): Map<string, number> {
     while (i < group.length) {
       let j = i
       while (j + 1 < group.length && group[j + 1].hh <= group[j].hh * 1.12) j++
-      const max = group[j].hh
-      for (let k = i; k <= j; k++) unified.set(group[k].id, max)
+      const cluster = group.slice(i, j + 1)
+      // a hand-sized member decides the cluster's size; otherwise the biggest wins
+      const sizedOnes = cluster.filter((c) => c.sized)
+      const target = sizedOnes.length ? Math.max(...sizedOnes.map((c) => c.hh)) : cluster[cluster.length - 1].hh
+      // a sized leader makes the whole cluster final - the base floor must not split it
+      for (const c of cluster) unified.set(c.id, { h: target, final: sizedOnes.length > 0 })
       i = j + 1
     }
   }
@@ -263,10 +267,11 @@ interface ArrangeResult {
   rows: string[][] // horizontal groups - members share Y
 }
 
-async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: Map<string, number>): Promise<ArrangeResult> {
+async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: Map<string, { h: number; final: boolean }>): Promise<ArrangeResult> {
   const stacks: string[][] = []
   const rows: string[][] = []
-  const userHeights: HeightOf = (m) => heightOverride?.get(m.el.id) ?? Math.max(1, m.el.heightMm)
+  const userHeights: HeightOf = (m) => heightOverride?.get(m.el.id)?.h ?? Math.max(1, m.el.heightMm)
+  const isFinal = (m: Measured) => !!m.el.sized || !!heightOverride?.get(m.el.id)?.final
   const { w, h } = design.sign
   const patches: Record<string, ElPatch> = {}
   const texts = design.elements.filter((e): e is TextEl => e.kind === 'text' && e.text.trim().length > 0)
@@ -306,8 +311,9 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
       for (const m of g) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
     }
-    // the canonical base look is the FLOOR: user sizes can only sit above it
-    const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => Math.max(userHeights(m), scaled(s)(m))
+    // the canonical base is the floor for UNTOUCHED sizes only - a size the
+    // user set by hand ("when I resize, you don't resize again") is final
+    const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), scaled(s)(m)))
 
     const wR = blockWidth(R, H)
     const wL = blockWidth(L, H)
@@ -357,7 +363,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       s = Math.min(s, (NUMBER_CAP * h) / rowUnit)
       for (const m of bottom) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       const canonRow: HeightOf = (m) => f1((row.includes(m) ? rowUnit : ratioOf(m)) * s)
-      const H: HeightOf = mode === 'canonical' ? canonRow : (m) => Math.max(userHeights(m), canonRow(m))
+      const H: HeightOf = mode === 'canonical' ? canonRow : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), canonRow(m)))
 
       const rowH = Math.max(...row.map((m) => H(m) * m.inkPerRef))
       const hB = stackExtent(bottom, H)
@@ -396,7 +402,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
         s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
-      const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => Math.max(userHeights(m), scaled(s)(m))
+      const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), scaled(s)(m)))
 
       const hT = stackExtent(top, H)
       const hB = stackExtent(bottom, H)
@@ -430,7 +436,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
         s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
-      const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => Math.max(userHeights(m), scaled(s)(m))
+      const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), scaled(s)(m)))
       placeStack(lines, H, w / 2, h / 2, patches, stacks)
     }
   }

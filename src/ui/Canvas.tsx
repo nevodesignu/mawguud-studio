@@ -488,7 +488,10 @@ export function Canvas() {
             if (!st) continue
             el.x = Math.round((cx + (st.x - cx) * ratio) * 10) / 10
             el.y = Math.round((cy + (st.y - cy) * ratio) * 10) / 10
-            if (el.kind === 'text' && st.heightMm) el.heightMm = Math.max(3, Math.round(st.heightMm * ratio * 10) / 10)
+            if (el.kind === 'text' && st.heightMm) {
+              el.heightMm = Math.max(3, Math.round(st.heightMm * ratio * 10) / 10)
+              el.sized = true // a hand resize is final
+            }
             if (el.kind === 'divider' && st.length) el.length = Math.max(5, Math.round(st.length * ratio * 10) / 10)
           }
         },

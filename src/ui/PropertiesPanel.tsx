@@ -143,7 +143,7 @@ export function PropertiesPanel() {
                 step={1}
                 min={3}
                 suffix="mm"
-                onChange={(v) => st.setForSelectedTexts({ heightMm: v })}
+                onChange={(v) => st.setForSelectedTexts({ heightMm: v, sized: true })}
               />
             </>
           )}
@@ -180,7 +180,7 @@ export function PropertiesPanel() {
                 </select>
               </span>
             </label>
-            <Num label="Height" value={sel.heightMm} step={1} min={3} suffix="mm" onChange={(v) => st.updateEl(sel.id, { heightMm: v })} />
+            <Num label="Height" value={sel.heightMm} step={1} min={3} suffix="mm" onChange={(v) => st.updateEl(sel.id, { heightMm: v, sized: true })} />
             <Num label="Tracking" value={sel.spacingEm * 100} step={1} min={0} max={40} suffix="%em" onChange={(v) => st.updateEl(sel.id, { spacingEm: v / 100 })} />
             <p className="hint">Tracking never breaks Arabic joins — it only spaces Latin letters and separate words.</p>
             <Num label="X" value={sel.x} suffix="mm" onChange={(v) => st.updateEl(sel.id, { x: v })} />

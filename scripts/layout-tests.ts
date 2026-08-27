@@ -224,11 +224,16 @@ async function sizingSovereignty() {
   const above = canonName + 15
   t(base, 'المهندس عبيد محمد').heightMm = above // deliberate: bigger than base
   t(base, '180').heightMm = Math.max(1, canonNum - 20) // stale: smaller than base
+  const handSized = Math.max(3, canonNum - 25)
+  t(base, 'Villa').heightMm = handSized
+  t(base, 'Villa').sized = true // the user resized this by hand - it is FINAL
   const patches = await arrangeDesign(base, { mode: 'layout' })
   const nameH = patches[t(base, 'المهندس عبيد محمد').id]?.heightMm ?? 0
   const numH = patches[t(base, '180').id]?.heightMm ?? 0
+  const villaH = patches[t(base, 'Villa').id]?.heightMm ?? 0
   assert(Math.abs(nameH - above) < 0.11, label, `above-base size not kept: ${above} -> ${nameH}`)
   assert(Math.abs(numH - canonNum) < 0.11, label, `below-base size not raised to base: ${numH} vs ${canonNum}`)
+  assert(Math.abs(villaH - handSized) < 0.11, label, `hand-resized size was overridden: ${handSized} -> ${villaH}`)
 }
 
 /** Nudge preservation: a small deliberate move survives Perfect-it; a large one snaps. */
