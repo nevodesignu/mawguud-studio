@@ -25,6 +25,7 @@ export interface TextEl {
   heightMm: number // height of a standard tall letter (alef/H)
   sized?: boolean // true once the USER set the size by hand - then it is final
   placed?: boolean // true once the USER moved it by hand - the position is final too
+  groupId?: string // elements sharing a groupId select and move as one
   x: number // centre of ink bbox
   y: number
   spacingEm: number // extra tracking, fraction of em (never applied inside Arabic joins)
@@ -33,6 +34,7 @@ export interface TextEl {
 export interface DividerEl {
   id: string
   kind: 'divider'
+  groupId?: string // elements sharing a groupId select and move as one
   x: number // centre
   y: number
   length: number

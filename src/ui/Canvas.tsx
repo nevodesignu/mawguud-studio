@@ -184,6 +184,11 @@ export function Canvas() {
         s.duplicateSelected()
         return
       }
+      if (ctrl && key === 'g') {
+        e.preventDefault()
+        e.shiftKey ? s.ungroupSelected() : s.groupSelected()
+        return
+      }
       if (ctrl && e.key === '0') {
         e.preventDefault()
         const el = wrapRef.current
@@ -635,6 +640,8 @@ export function Canvas() {
               {mode === 'design' && sel.length > 0 && item('Cut', () => s.cutSelected())}
               {mode === 'design' && item('Paste here', () => s.paste({ x: ctxMenu.wx, y: ctxMenu.wy }), !hasClipboard())}
               {mode === 'design' && sel.length > 0 && item('Duplicate', () => s.duplicateSelected())}
+              {mode === 'design' && sel.length >= 2 && item('Group', () => s.groupSelected())}
+              {mode === 'design' && sel.some((el) => el.groupId) && item('Ungroup', () => s.ungroupSelected())}
               {mode === 'design' && sel.length > 0 && item('Delete', () => s.removeSelected())}
               <div className="ctx-sep" />
               {item('Undo', () => s.undo())}

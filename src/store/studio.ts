@@ -71,6 +71,8 @@ interface StudioState {
   moveSelected(dx: number, dy: number): void
   removeSelected(): void
   duplicateSelected(): void
+  groupSelected(): void
+  ungroupSelected(): void
   alignSelected(op: AlignOp): void
   distributeSelectedV(): void
   setForSelectedTexts(patch: Partial<TextEl>): void
@@ -94,6 +96,16 @@ interface StudioState {
 
 const clone = (d: Design): Design => JSON.parse(JSON.stringify(d))
 const cloneEls = (els: El[]): El[] => JSON.parse(JSON.stringify(els))
+
+/** Selecting any member of a group selects the whole group. */
+const expandGroups = (d: Design, ids: string[]): string[] => {
+  const gids = new Set<string>()
+  for (const el of d.elements) if (ids.includes(el.id) && el.groupId) gids.add(el.groupId)
+  if (!gids.size) return ids
+  const out = new Set(ids)
+  for (const el of d.elements) if (el.groupId && gids.has(el.groupId)) out.add(el.id)
+  return [...out]
+}
 
 export const hasClipboard = () => clipboard.length > 0
 
@@ -184,14 +196,17 @@ export const useStudio = create<StudioState>((set, get) => ({
       set({ selectedIds: [] })
       return
     }
+    // a grouped element always brings its whole group along
+    const members = expandGroups(get().design, [id])
     if (additive) {
       const cur = get().selectedIds
-      set({ selectedIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] })
+      const isIn = members.every((m) => cur.includes(m))
+      set({ selectedIds: isIn ? cur.filter((x) => !members.includes(x)) : [...new Set([...cur, ...members])] })
     } else {
-      set({ selectedIds: [id] })
+      set({ selectedIds: members })
     }
   },
-  selectMany: (ids) => set({ selectedIds: ids }),
+  selectMany: (ids) => set({ selectedIds: expandGroups(get().design, ids) }),
   selectAll: () => set({ selectedIds: get().design.elements.map((e) => e.id) }),
   setView: (zoom, panX, panY) => set({ zoom, panX, panY }),
   fitView: (vw, vh) => {
@@ -288,6 +303,7 @@ export const useStudio = create<StudioState>((set, get) => ({
       const el = d.elements.find((e) => e.id === id)
       if (!el) return
       const copy = { ...JSON.parse(JSON.stringify(el)), id: uid(), x: el.x + 10, y: el.y + 10 }
+      delete copy.groupId // a single duplicate does not sneak into the original's group
       d.elements.push(copy)
       set({ selectedIds: [copy.id] })
     }),
@@ -329,10 +345,16 @@ export const useStudio = create<StudioState>((set, get) => ({
     }
     const ids: string[] = []
     get().mutate((d) => {
+      const gidMap = new Map<string, string>()
       for (const el of cloneEls(clipboard)) {
         el.id = uid()
         el.x = Math.round((el.x + dx) * 10) / 10
         el.y = Math.round((el.y + dy) * 10) / 10
+        // a pasted group is its OWN group, not new members of the original
+        if (el.groupId) {
+          if (!gidMap.has(el.groupId)) gidMap.set(el.groupId, uid())
+          el.groupId = gidMap.get(el.groupId)
+        }
         ids.push(el.id)
         d.elements.push(el)
       }
@@ -366,15 +388,36 @@ export const useStudio = create<StudioState>((set, get) => ({
     const newIds: string[] = []
     get().mutate((d) => {
       const copies = cloneEls(d.elements.filter((e) => ids.includes(e.id)))
+      const gidMap = new Map<string, string>()
       for (const el of copies) {
         el.id = uid()
         el.x += 10
         el.y += 10
+        // a duplicated group is its OWN group, not new members of the original
+        if (el.groupId) {
+          if (!gidMap.has(el.groupId)) gidMap.set(el.groupId, uid())
+          el.groupId = gidMap.get(el.groupId)
+        }
         newIds.push(el.id)
         d.elements.push(el)
       }
     })
     set({ selectedIds: newIds })
+  },
+  groupSelected: () => {
+    const ids = get().selectedIds
+    if (ids.length < 2) return
+    const gid = uid()
+    get().mutate((d) => {
+      for (const el of d.elements) if (ids.includes(el.id)) el.groupId = gid
+    })
+  },
+  ungroupSelected: () => {
+    const ids = get().selectedIds
+    if (!ids.length) return
+    get().mutate((d) => {
+      for (const el of d.elements) if (ids.includes(el.id)) delete el.groupId
+    })
   },
   alignSelected: (op) => {
     const { selectedIds, design } = get()

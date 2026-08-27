@@ -103,11 +103,31 @@ export function PropertiesPanel() {
         </>
       ) : multi ? (
         <>
-          <h3>{selectedIds.length} elements selected</h3>
+          <h3>
+            {(() => {
+              const selEls = design.elements.filter((e) => selectedIds.includes(e.id))
+              const gids = new Set(selEls.map((e) => e.groupId).filter(Boolean))
+              const oneGroup = gids.size === 1 && selEls.every((e) => e.groupId)
+              return oneGroup ? `Group of ${selectedIds.length}` : `${selectedIds.length} elements selected`
+            })()}
+          </h3>
           <div className="stack">
             <button className="primary" disabled={arranging} onClick={() => void st.autoArrange()}>
               ✨ Perfect the layout
             </button>
+          </div>
+          <div className="row">
+            {(() => {
+              const selEls = design.elements.filter((e) => selectedIds.includes(e.id))
+              const gids = new Set(selEls.map((e) => e.groupId).filter(Boolean))
+              const oneGroup = gids.size === 1 && selEls.every((e) => e.groupId)
+              return (
+                <>
+                  {!oneGroup && <button onClick={() => st.groupSelected()}>Group (Ctrl+G)</button>}
+                  {selEls.some((e) => e.groupId) && <button onClick={() => st.ungroupSelected()}>Ungroup (Ctrl+Shift+G)</button>}
+                </>
+              )
+            })()}
           </div>
           <h3>Align</h3>
           <div className="row">
