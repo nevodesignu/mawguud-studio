@@ -270,8 +270,8 @@ export function PropertiesPanel() {
             </button>
           </div>
           <p className="hint">
-            Centers text and divider on the board, sizes every line to fit its column, and spaces the stack evenly — like the production
-            templates.
+            Reads your intent and makes it crisp: your sizes stay, your divider stays where you put it (snapped to exact center only when
+            it's already close), text centers in its side, spacing evens out, and only what overflows gets shrunk.
           </p>
           <p className="hint">Shift-click for multi-select, drag empty canvas to box-select, Ctrl+C/V copy &amp; paste. Arrows nudge 1mm (Shift = 5mm).</p>
         </>
