@@ -136,7 +136,7 @@ async function rawGeometryOf(el: El): Promise<MultiPoly> {
   const shaped = await shapedAsync(el.fontId, el.text, el.spacingEm)
   const inkH = shaped.bbox.maxY - shaped.bbox.minY
   if (!(inkH > 0)) return []
-  const s = el.heightMm / inkH
+  const s = el.heightMm / (shaped.refHeight > 0 ? shaped.refHeight : inkH)
   const cx = (shaped.bbox.minX + shaped.bbox.maxX) / 2
   const cy = (shaped.bbox.minY + shaped.bbox.maxY) / 2
   return shapedToPolys(shaped, s, el.x - cx * s, el.y + cy * s, 0.03)

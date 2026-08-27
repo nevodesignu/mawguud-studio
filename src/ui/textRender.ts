@@ -17,7 +17,9 @@ export function renderTextEl(el: TextEl, shaped: ShapedText): TextRender | null 
   const inkH = bbox.maxY - bbox.minY
   const inkW = bbox.maxX - bbox.minX
   if (!(inkH > 0) || !(inkW >= 0)) return null
-  const s = el.heightMm / inkH
+  // heightMm means "height of a standard tall letter" - normalizing by the
+  // font's reference height keeps every line's letters the same visual size
+  const s = el.heightMm / (shaped.refHeight > 0 ? shaped.refHeight : inkH)
   const cx = (bbox.minX + bbox.maxX) / 2
   const cy = (bbox.minY + bbox.maxY) / 2
   const ox = el.x - cx * s

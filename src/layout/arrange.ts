@@ -28,8 +28,8 @@ const LABEL_RE =
 
 const RATIO: Record<Measured['role'], number> = { name: 1.0, number: 2.0, label: 0.85 }
 const STACK_GAP = 0.3 // fraction of mean line height
-const WIDTH_FILL = 0.68 // ensemble width target as fraction of board width
-const HEIGHT_FILL = 0.7 // ensemble height cap
+const WIDTH_FILL = 0.72 // ensemble width target as fraction of board width
+const HEIGHT_FILL = 0.74 // ensemble height cap
 const DIV_GAP_X = 0.045 // gap between divider and each block, fraction of W
 const DIV_GAP_Y = 0.05 // for horizontal dividers, fraction of H
 const LINE_CAP = 0.4 // no single line taller than this fraction of board H
@@ -40,8 +40,8 @@ async function measure(el: TextEl): Promise<Measured> {
   try {
     const shaped = await shapedAsync(el.fontId, el.text, el.spacingEm)
     const w = shaped.bbox.maxX - shaped.bbox.minX
-    const h = shaped.bbox.maxY - shaped.bbox.minY
-    return { el, aspect: h > 0 && w > 0 ? w / h : 4, role }
+    const ref = shaped.refHeight > 0 ? shaped.refHeight : shaped.bbox.maxY - shaped.bbox.minY
+    return { el, aspect: ref > 0 && w > 0 ? w / ref : 4, role }
   } catch {
     return { el, aspect: 4, role }
   }

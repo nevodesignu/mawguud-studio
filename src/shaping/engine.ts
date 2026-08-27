@@ -29,6 +29,7 @@ export interface LoadedFont {
   upem: number
   shapeRun(text: string, rtl: boolean): { g: number; ax: number; dx: number; dy: number; cl: number }[]
   glyphCmds(gid: number): PathCmd[]
+  refHeight(): number // ink height of a reference tall letter (alef/H), font units
   destroy(): void
 }
 
@@ -41,6 +42,22 @@ export function loadFont(id: string, data: ArrayBuffer): LoadedFont {
   const upem: number = face.upem || 1000
   font.setScale(upem, upem)
   const pathCache = new Map<number, PathCmd[]>()
+
+  const inkHeightOf = (self: LoadedFont, text: string): number => {
+    let minY = Infinity
+    let maxY = -Infinity
+    for (const g of self.shapeRun(text, false)) {
+      for (const ring of flattenCmds(self.glyphCmds(g.g), upem / 50)) {
+        for (const [, y] of ring) {
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    return maxY > minY ? maxY - minY : 0
+  }
+
+  let refH: number | null = null
 
   return {
     id,
@@ -62,6 +79,15 @@ export function loadFont(id: string, data: ArrayBuffer): LoadedFont {
         pathCache.set(gid, cmds)
       }
       return cmds
+    },
+    refHeight() {
+      // a line's size is defined by a standard tall letter, so a hamza or a
+      // slash in one line can never make its letters render smaller than the
+      // line next to it
+      if (refH === null) {
+        refH = inkHeightOf(this, 'ا') || inkHeightOf(this, 'H') || upem * 0.72
+      }
+      return refH
     },
     destroy() {
       font.destroy()
@@ -130,6 +156,7 @@ export interface ShapedText {
   upem: number
   bbox: BBox // ink bbox in font units, y-up
   advance: number
+  refHeight: number // the font's reference line height (alef/H), font units
 }
 
 /**
@@ -160,7 +187,7 @@ export function shapeLine(font: LoadedFont, text: string, letterSpacing = 0): Sh
       for (const [x, y] of ring) growBBox(bbox, x + g.x, y + g.y)
     }
   }
-  return { glyphs, upem: font.upem, bbox, advance: pen }
+  return { glyphs, upem: font.upem, bbox, advance: pen, refHeight: font.refHeight() }
 }
 
 /**
