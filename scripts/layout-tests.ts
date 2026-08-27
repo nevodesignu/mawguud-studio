@@ -208,23 +208,27 @@ async function goldenMaster() {
 }
 
 /**
- * SIZING SOVEREIGNTY - the owner's law: "I do the sizing". Layout mode
- * (the Perfect-it button) must never change any text height, whatever
- * sizes the user chose.
+ * SIZING SOVEREIGNTY (final form): the canonical base look is the FLOOR.
+ * User sizes ABOVE the base are kept exactly; sizes BELOW the base rise to
+ * it - text never renders smaller than the base, and never shrinks.
  */
 async function sizingSovereignty() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
-  const design = makeDesign('sov', signFromSpec(sp), botElements(sp, [['Villa', '180'], ['المهندس عبيد محمد']]))
-  const custom = [18, 62, 27] // deliberately odd user sizes
-  design.elements.filter((e): e is TextEl => e.kind === 'text').forEach((e, i) => (e.heightMm = custom[i]))
-  const patches = await arrangeDesign(design, { mode: 'layout' })
+  const base = makeDesign('sov', signFromSpec(sp), botElements(sp, [['Villa', '180'], ['المهندس عبيد محمد']]))
+  const t = (design: Design, txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  const canonPatches = await arrangeDesign(JSON.parse(JSON.stringify(base)), { mode: 'canonical' })
+  const canonName = canonPatches[t(base, 'المهندس عبيد محمد').id]?.heightMm ?? 0
+  const canonNum = canonPatches[t(base, '180').id]?.heightMm ?? 0
   const label = 'SOVEREIGNTY Villa/180'
-  design.elements
-    .filter((e): e is TextEl => e.kind === 'text')
-    .forEach((e, i) => {
-      const p = patches[e.id]
-      assert(!!p && Math.abs((p.heightMm ?? 0) - custom[i]) < 0.001, label, `"${e.text}" height changed: ${custom[i]} -> ${p?.heightMm}`)
-    })
+  assert(canonName > 5 && canonNum > 5, label, `canonical heights implausible: ${canonName}/${canonNum}`)
+  const above = canonName + 15
+  t(base, 'المهندس عبيد محمد').heightMm = above // deliberate: bigger than base
+  t(base, '180').heightMm = Math.max(1, canonNum - 20) // stale: smaller than base
+  const patches = await arrangeDesign(base, { mode: 'layout' })
+  const nameH = patches[t(base, 'المهندس عبيد محمد').id]?.heightMm ?? 0
+  const numH = patches[t(base, '180').id]?.heightMm ?? 0
+  assert(Math.abs(nameH - above) < 0.11, label, `above-base size not kept: ${above} -> ${nameH}`)
+  assert(Math.abs(numH - canonNum) < 0.11, label, `below-base size not raised to base: ${numH} vs ${canonNum}`)
 }
 
 /** Nudge preservation: a small deliberate move survives Perfect-it; a large one snaps. */

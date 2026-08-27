@@ -298,20 +298,16 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     const [R, L] = cols
 
     const gapX = DIV_GAP_X * w
-    let H: HeightOf
-    if (mode === 'layout') {
-      H = userHeights
-    } else {
-      const unitsW = blockUnits(R) + blockUnits(L)
-      const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
-      let s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
-      for (const g of [R, L]) {
-        if (!g.length) continue
-        s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
-        for (const m of g) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
-      }
-      H = scaled(s)
+    const unitsW = blockUnits(R) + blockUnits(L)
+    const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
+    let s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
+    for (const g of [R, L]) {
+      if (!g.length) continue
+      s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
+      for (const m of g) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
     }
+    // the canonical base look is the FLOOR: user sizes can only sit above it
+    const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => Math.max(userHeights(m), scaled(s)(m))
 
     const wR = blockWidth(R, H)
     const wL = blockWidth(L, H)
@@ -351,21 +347,17 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       const CW = WIDTH_FILL * w
       const midGap = 0.06 * w
 
-      let H: HeightOf
-      if (mode === 'layout') {
-        H = userHeights
-      } else {
-        let s = Infinity
-        const rowInkUnits = rowUnit * Math.max(...row.map((m) => m.inkPerRef))
-        const unitsH = rowInkUnits + stackUnits(bottom)
-        const gapsH = gapY + div.thickness + (bottom.length ? gapY : 0)
-        s = Math.min(s, (HEIGHT_FILL * h - gapsH) / unitsH)
-        s = Math.min(s, (CW - midGap) / (num.aspect * rowUnit + other.aspect * rowUnit))
-        for (const m of bottom) s = Math.min(s, CW / (m.aspect * ratioOf(m)))
-        s = Math.min(s, (NUMBER_CAP * h) / rowUnit)
-        for (const m of bottom) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
-        H = scaled(s)
-      }
+      let s = Infinity
+      const rowInkUnits = rowUnit * Math.max(...row.map((m) => m.inkPerRef))
+      const unitsH = rowInkUnits + stackUnits(bottom)
+      const gapsH = gapY + div.thickness + (bottom.length ? gapY : 0)
+      s = Math.min(s, (HEIGHT_FILL * h - gapsH) / unitsH)
+      s = Math.min(s, (CW - midGap) / (num.aspect * rowUnit + other.aspect * rowUnit))
+      for (const m of bottom) s = Math.min(s, CW / (m.aspect * ratioOf(m)))
+      s = Math.min(s, (NUMBER_CAP * h) / rowUnit)
+      for (const m of bottom) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
+      const canonRow: HeightOf = (m) => f1((row.includes(m) ? rowUnit : ratioOf(m)) * s)
+      const H: HeightOf = mode === 'canonical' ? canonRow : (m) => Math.max(userHeights(m), canonRow(m))
 
       const rowH = Math.max(...row.map((m) => H(m) * m.inkPerRef))
       const hB = stackExtent(bottom, H)
@@ -397,19 +389,14 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       placeStack(bottom, H, w / 2, cyB, patches, stacks)
       rows.push([leftM.el.id, rightM.el.id])
     } else {
-      let H: HeightOf
-      if (mode === 'layout') {
-        H = userHeights
-      } else {
-        const unitsH = stackUnits(top) + stackUnits(bottom)
-        const gapsH = (top.length ? gapY : 0) + (bottom.length ? gapY : 0) + div.thickness
-        let s = unitsH > 0 ? (HEIGHT_FILL * h - gapsH) / unitsH : 1
-        for (const m of measured) {
-          s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
-          s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
-        }
-        H = scaled(s)
+      const unitsH = stackUnits(top) + stackUnits(bottom)
+      const gapsH = (top.length ? gapY : 0) + (bottom.length ? gapY : 0) + div.thickness
+      let s = unitsH > 0 ? (HEIGHT_FILL * h - gapsH) / unitsH : 1
+      for (const m of measured) {
+        s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
+        s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
+      const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => Math.max(userHeights(m), scaled(s)(m))
 
       const hT = stackExtent(top, H)
       const hB = stackExtent(bottom, H)
@@ -438,17 +425,12 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     // ---- no divider: one centered stack ----
     const lines = [...measured].sort(byY)
     if (lines.length) {
-      let H: HeightOf
-      if (mode === 'layout') {
-        H = userHeights
-      } else {
-        let s = (0.72 * h) / stackUnits(lines)
-        for (const m of lines) {
-          s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
-          s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
-        }
-        H = scaled(s)
+      let s = (0.72 * h) / stackUnits(lines)
+      for (const m of lines) {
+        s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
+        s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
+      const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => Math.max(userHeights(m), scaled(s)(m))
       placeStack(lines, H, w / 2, h / 2, patches, stacks)
     }
   }
