@@ -124,7 +124,7 @@ async function runCase(c: Case, w: number, h: number) {
   const sp = spec(c.layout, w, h)
   const design = makeDesign(`${c.name} ${w}x${h}`, signFromSpec(sp), botElements(sp, c.groups))
   const apply = async () => {
-    const patches = await arrangeDesign(design)
+    const patches = await arrangeDesign(design, { mode: 'canonical' })
     for (const el of design.elements) {
       const p = patches[el.id]
       if (p) Object.assign(el, p)
@@ -189,7 +189,7 @@ async function runCase(c: Case, w: number, h: number) {
 async function goldenMaster() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
   const design = makeDesign('golden', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
-  const patches = await arrangeDesign(design)
+  const patches = await arrangeDesign(design, { mode: 'canonical' })
   for (const el of design.elements) {
     const p = patches[el.id]
     if (p) Object.assign(el, p)
@@ -207,6 +207,45 @@ async function goldenMaster() {
   if (d && d.kind === 'divider') near(d.length, 118.4, 2, 'divider length')
 }
 
+/**
+ * SIZING SOVEREIGNTY - the owner's law: "I do the sizing". Layout mode
+ * (the Perfect-it button) must never change any text height, whatever
+ * sizes the user chose.
+ */
+async function sizingSovereignty() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('sov', signFromSpec(sp), botElements(sp, [['Villa', '180'], ['المهندس عبيد محمد']]))
+  const custom = [18, 62, 27] // deliberately odd user sizes
+  design.elements.filter((e): e is TextEl => e.kind === 'text').forEach((e, i) => (e.heightMm = custom[i]))
+  const patches = await arrangeDesign(design, { mode: 'layout' })
+  const label = 'SOVEREIGNTY Villa/180'
+  design.elements
+    .filter((e): e is TextEl => e.kind === 'text')
+    .forEach((e, i) => {
+      const p = patches[e.id]
+      assert(!!p && Math.abs((p.heightMm ?? 0) - custom[i]) < 0.001, label, `"${e.text}" height changed: ${custom[i]} -> ${p?.heightMm}`)
+    })
+}
+
+/** Nudge preservation: a small deliberate move survives Perfect-it; a large one snaps. */
+async function nudgeKeep() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('nudge', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
+  const applyMode = async (mode: 'layout' | 'canonical') => {
+    const patches = await arrangeDesign(design, { mode })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  }
+  await applyMode('canonical')
+  const line = design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'اسلام')!
+  const nudgedY = line.y - 5 // "a bit upward"
+  line.y = nudgedY
+  await applyMode('layout')
+  assert(Math.abs(line.y - nudgedY) < 0.001, 'NUDGE', `small nudge was not kept: ${nudgedY} -> ${line.y}`)
+  line.y = nudgedY + 80 // thrown far off - should snap back to proper placement
+  await applyMode('layout')
+  assert(Math.abs(line.y - (nudgedY + 80)) > 5, 'NUDGE', 'large displacement was not re-placed')
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -220,6 +259,8 @@ async function main() {
     }
   }
   await goldenMaster()
+  await sizingSovereignty()
+  await nudgeKeep()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')

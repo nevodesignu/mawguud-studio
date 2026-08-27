@@ -74,7 +74,7 @@ interface StudioState {
   alignSelected(op: AlignOp): void
   distributeSelectedV(): void
   setForSelectedTexts(patch: Partial<TextEl>): void
-  autoArrange(respectSizes?: boolean): Promise<void>
+  autoArrange(mode?: 'layout' | 'canonical'): Promise<void>
   createFromBot(spec: TemplateSpec, groups: string[][]): Promise<void>
 
   setMode(mode: Mode): void
@@ -412,10 +412,10 @@ export const useStudio = create<StudioState>((set, get) => ({
       }
     })
   },
-  autoArrange: async (respectSizes = true) => {
+  autoArrange: async (mode = 'layout') => {
     set({ arranging: true })
     try {
-      const patches = await arrangeDesign(get().design, { respectSizes })
+      const patches = await arrangeDesign(get().design, { mode })
       get().mutate((d) => {
         for (const el of d.elements) {
           const p = patches[el.id]
@@ -431,7 +431,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   createFromBot: async (spec, groups) => {
     await get().flushSave()
     startFresh(set, makeDesign(specName(spec), signFromSpec(spec), botElements(spec, groups)))
-    await get().autoArrange(false) // bot mode: pure canonical sizing
+    await get().autoArrange('canonical') // bot mode: the bot also sizes
     scheduleSave(get, set)
   },
 

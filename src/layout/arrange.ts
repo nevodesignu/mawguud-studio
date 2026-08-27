@@ -1,20 +1,19 @@
-// The layout brain behind "Perfect it" and the Sign Bot - v4, trained on real
-// Mawguud production cut files and the owner's corrections:
+// The layout brain behind "Perfect it" and the Sign Bot - v5.
 //
-//   - lines have ROLES: a small label (Villa / apartment word) sits above a
-//     BIG number (label ~0.85 units, number ~2.0, name lines 1.0)
-//   - vertical spacing is computed on INK EXTENTS, not slot boxes: descenders
-//     and hamzas can never collide, and gaps stay visually tight (0.18 of the
-//     letter height)
-//   - the divider is SHORT and content-matched (block extent x1.15)
-//   - content fills ~78% of the width with generous margins
-//   - letter|number signs ("B | 223") sit on ONE row at equal size
-//   - Up|Down signs with a label + number on top ("Villa   34") spread them on
-//     one row - label toward one edge, number toward the other - with the
-//     divider spanning the full content width (the catalog product look)
+// THE CONTRACT (the owner's words: "I do the sizing - just make the sign
+// ready"): two modes.
 //
-// Sizes derive from text roles + board alone (deterministic); Perfect-it mode
-// additionally treats user-set sizes as a grow-only floor.
+//   'layout'    - Perfect-it. NEVER touches a text size. Takes the heights the
+//                 user set and does pure geometry: ink-aware tight stacking,
+//                 blocks centered beside the divider, divider content-matched,
+//                 whole composition centered on the board.
+//   'canonical' - Sign Bot. Also sizes the text, using roles trained on the
+//                 real production files (label ~0.85 above a 2.0 number, names
+//                 1.0, numbers capped at 30% of board height, ~78% width fill).
+//
+// Shared pattern knowledge (both modes): Left|Right columns, label-over-number,
+// one-row letter|number ("B | 223"), Up|Down stacks, and the catalog Villa row
+// (label left / number right on one line over a full-width divider).
 import type { Design, TextEl, DividerEl } from '../model'
 import { isNumberLine } from '../model'
 import { shapedAsync } from '../shaping/service'
@@ -26,20 +25,26 @@ interface Measured {
   aspect: number // ink width / reference height
   inkPerRef: number // ink height / reference height (>1 for hamza/descenders)
   role: 'name' | 'number' | 'label'
-  unit?: number // explicit size override in ratio units (special modes)
+  unit?: number // ratio-unit override used by special canonical modes
 }
 
 const LABEL_RE =
   /^(شقة|شقه|فيلا|عمارة|عماره|دور|مكتب|محل|عيادة|عياده|رقم|بدروم|villa|apt\.?|apartment|flat|office|floor|shop|unit|no\.?|bezmnt|basement)$/i
 
 const RATIO: Record<'name' | 'number' | 'label', number> = { name: 1.0, number: 2.0, label: 0.85 }
-const STACK_GAP = 0.18 // ink gap between lines, fraction of mean letter height
-const WIDTH_FILL = 0.78 // ensemble width target as fraction of board width
-const HEIGHT_FILL = 0.74 // ensemble height cap
+const STACK_GAP = 0.18 // ink gap between lines, fraction of mean line height
+const WIDTH_FILL = 0.78 // canonical ensemble width target
+const HEIGHT_FILL = 0.74 // canonical ensemble height cap
 const DIV_GAP_X = 0.045 // gap between divider and each block, fraction of W
 const DIV_GAP_Y = 0.05 // for horizontal dividers, fraction of H
-const LINE_CAP = 0.4 // no single line taller than this fraction of board H
-const NUMBER_CAP = 0.3 // numbers in the production files run 24-35% of board H
+const LINE_CAP = 0.4
+const NUMBER_CAP = 0.3
+
+export type ArrangeMode = 'layout' | 'canonical'
+
+export interface ArrangeOpts {
+  mode?: ArrangeMode
+}
 
 async function measure(el: TextEl): Promise<Measured> {
   const role: Measured['role'] = isNumberLine(el.text) ? 'number' : LABEL_RE.test(el.text.trim()) ? 'label' : 'name'
@@ -57,64 +62,72 @@ async function measure(el: TextEl): Promise<Measured> {
 const r1 = (v: number) => Math.round(v * 10) / 10
 const f1 = (v: number) => Math.floor(v * 10) / 10
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-
 const ratioOf = (m: Measured) => m.unit ?? RATIO[m.role]
+const hasArabic = (t: string) => /[؀-ۿ]/.test(t)
 
-/** Stack extent of a group in ratio units, using INK heights + ink gaps. */
-function stackUnits(lines: Measured[]): number {
+/** Height of each line in mm - the heart of the two modes. */
+type HeightOf = (m: Measured) => number
+
+const userHeights: HeightOf = (m) => Math.max(1, m.el.heightMm)
+const scaled = (s: number): HeightOf => (m) => f1(ratioOf(m) * s)
+
+/** Stack extent in mm: ink heights + tight gaps. */
+function stackExtent(lines: Measured[], H: HeightOf): number {
   if (lines.length === 0) return 0
-  const rs = lines.map(ratioOf)
-  const meanR = rs.reduce((a, b) => a + b, 0) / rs.length
-  const ink = lines.reduce((a, m) => a + ratioOf(m) * m.inkPerRef, 0)
-  return ink + STACK_GAP * meanR * (lines.length - 1)
+  const hs = lines.map(H)
+  const mean = hs.reduce((a, b) => a + b, 0) / hs.length
+  return lines.reduce((a, m, i) => a + hs[i] * m.inkPerRef, 0) + STACK_GAP * mean * (lines.length - 1)
 }
 
-/** Widest line of a group in ratio units. */
-const blockUnits = (lines: Measured[]) => (lines.length ? Math.max(...lines.map((m) => m.aspect * ratioOf(m))) : 0)
+const blockWidth = (lines: Measured[], H: HeightOf) => (lines.length ? Math.max(...lines.map((m) => m.aspect * H(m))) : 0)
 
-/** Place one stack centered at (cx, cy) with scale s - spacing by ink extents. */
-function placeStack(lines: Measured[], s: number, cx: number, cy: number, patches: Record<string, ElPatch>): void {
+/** Place one stack centered at (cx, cy) - spacing by ink extents. */
+function placeStack(lines: Measured[], H: HeightOf, cx: number, cy: number, patches: Record<string, ElPatch>): void {
   if (lines.length === 0) return
-  const slots = lines.map((m) => f1(ratioOf(m) * s))
-  const meanSlot = slots.reduce((a, b) => a + b, 0) / slots.length
-  const gap = STACK_GAP * meanSlot
-  const inkHs = lines.map((m, i) => slots[i] * m.inkPerRef)
+  const hs = lines.map(H)
+  const mean = hs.reduce((a, b) => a + b, 0) / hs.length
+  const gap = STACK_GAP * mean
+  const inkHs = lines.map((m, i) => hs[i] * m.inkPerRef)
   const total = inkHs.reduce((a, b) => a + b, 0) + gap * (lines.length - 1)
   let y = cy - total / 2
   lines.forEach((m, i) => {
-    patches[m.el.id] = { x: r1(cx), y: r1(y + inkHs[i] / 2), heightMm: slots[i] }
+    patches[m.el.id] = { x: r1(cx), y: r1(y + inkHs[i] / 2), heightMm: r1(hs[i]) }
     y += inkHs[i] + gap
   })
 }
 
-const stackHeightMm = (lines: Measured[], s: number) => {
-  if (!lines.length) return 0
-  const slots = lines.map((m) => f1(ratioOf(m) * s))
-  const meanSlot = slots.reduce((a, b) => a + b, 0) / slots.length
-  return lines.reduce((a, m, i) => a + slots[i] * m.inkPerRef, 0) + STACK_GAP * meanSlot * (lines.length - 1)
+/** Canonical-units stack extent (for solving the scale factor). */
+function stackUnits(lines: Measured[]): number {
+  if (lines.length === 0) return 0
+  const rs = lines.map(ratioOf)
+  const meanR = rs.reduce((a, b) => a + b, 0) / rs.length
+  return lines.reduce((a, m) => a + ratioOf(m) * m.inkPerRef, 0) + STACK_GAP * meanR * (lines.length - 1)
 }
 
-const blockWidthMm = (lines: Measured[], s: number) => (lines.length ? Math.max(...lines.map((m) => m.aspect * f1(ratioOf(m) * s))) : 0)
-
-const hasArabic = (t: string) => /[؀-ۿ]/.test(t)
-
-export interface ArrangeOpts {
-  /**
-   * Perfect-it mode: the user's current sizes are a FLOOR. The canonical scale
-   * can match or grow them but never shrink below what the user set by hand -
-   * except past the physical limits of the board.
-   */
-  respectSizes?: boolean
-}
-
-/** The user's expressed scale intent: the largest current height per ratio unit. */
-const userScale = (groups: Measured[][]) => {
-  const all = groups.flat()
-  return all.length ? Math.max(...all.map((m) => Math.max(1, m.el.heightMm) / ratioOf(m))) : 0
-}
+const blockUnits = (lines: Measured[]) => (lines.length ? Math.max(...lines.map((m) => m.aspect * ratioOf(m))) : 0)
 
 /** Compute perfect-layout patches for every element (keyed by element id). */
 export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Promise<Record<string, ElPatch>> {
+  const mode: ArrangeMode = opts.mode ?? 'layout'
+  const { w, h } = design.sign
+  const patchesRaw = await arrangeCore(design, mode)
+  if (mode !== 'layout') return patchesRaw
+  // Understand the user's mind: an element sitting CLOSE to its ideal spot was
+  // deliberately nudged there ("a bit upward, slightly to the side") - keep it.
+  // An element far from ideal is asking to be placed properly.
+  const NUDGE_KEEP = Math.max(8, 0.04 * Math.min(w, h))
+  for (const el of design.elements) {
+    const p = patchesRaw[el.id]
+    if (!p || p.x === undefined || p.y === undefined) continue
+    if (Math.hypot(el.x - p.x, el.y - p.y) <= NUDGE_KEEP) {
+      p.x = el.x
+      p.y = el.y
+    }
+  }
+  return patchesRaw
+}
+
+async function arrangeCore(design: Design, mode: ArrangeMode): Promise<Record<string, ElPatch>> {
   const { w, h } = design.sign
   const patches: Record<string, ElPatch> = {}
   const texts = design.elements.filter((e): e is TextEl => e.kind === 'text' && e.text.trim().length > 0)
@@ -128,53 +141,48 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
     const right = measured.filter((m) => m.el.x >= div.x).sort(byY)
     const left = measured.filter((m) => m.el.x < div.x).sort(byY)
 
-    // letter|number mode: two short single lines sit on one row at equal size
+    // letter|number mode (canonical sizing only): equal size on one row
     const shortSingle = (g: Measured[]) => g.length === 1 && g[0].el.text.trim().length <= 4
-    const oneRow = shortSingle(right) && shortSingle(left)
+    const oneRow = mode === 'canonical' && shortSingle(right) && shortSingle(left)
     const rows: Measured[][] = oneRow ? [right, left].map((g) => g.map((m) => ({ ...m, unit: 2.0 }))) : [right, left]
     const [R, L] = rows
 
     const gapX = DIV_GAP_X * w
-    const unitsW = blockUnits(R) + blockUnits(L)
-    const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
-    let s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
-    for (const g of [R, L]) {
-      if (!g.length) continue
-      s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
-      for (const m of g) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
-    }
-    if (opts.respectSizes) {
-      // never shrink below what the user set - up to the physical board limits
-      let sHard = unitsW > 0 ? (0.92 * w - gapsW) / unitsW : s
+    let H: HeightOf
+    if (mode === 'layout') {
+      H = userHeights
+    } else {
+      const unitsW = blockUnits(R) + blockUnits(L)
+      const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
+      let s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
       for (const g of [R, L]) {
         if (!g.length) continue
-        sHard = Math.min(sHard, (0.9 * h) / stackUnits(g))
-        for (const m of g) sHard = Math.min(sHard, ((m.role === 'number' ? 0.38 : 0.5) * h) / ratioOf(m))
+        s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
+        for (const m of g) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
-      s = Math.max(s, Math.min(userScale([R, L]), sHard))
+      H = scaled(s)
     }
 
-    const wR = blockWidthMm(R, s)
-    const wL = blockWidthMm(L, s)
+    const wR = blockWidth(R, H)
+    const wL = blockWidth(L, H)
     const total = wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR
     const x0 = (w - total) / 2
     const cxL = x0 + wL / 2
     const divX = x0 + wL + (L.length ? gapX : 0) + div.thickness / 2
     const cxR = x0 + wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR / 2
 
-    // divider spans the taller block, with a little overshoot - like the cut files
-    const divLen = clamp(Math.max(stackHeightMm(R, s), stackHeightMm(L, s)) * 1.15, 0.22 * h, 0.8 * h)
+    // divider length is sizing: the user's value rules in layout mode
+    const divLen = mode === 'layout' ? div.length : clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
     patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(divLen) }
-    placeStack(R, s, cxR, h / 2, patches)
-    placeStack(L, s, cxL, h / 2, patches)
+    placeStack(R, H, cxR, h / 2, patches)
+    placeStack(L, H, cxL, h / 2, patches)
   } else if (div) {
     // ---- Up | Down (wide) and Vertical (tall) ----
     const top = measured.filter((m) => m.el.y < div.y).sort(byY)
     const bottom = measured.filter((m) => m.el.y >= div.y).sort(byY)
     const gapY = DIV_GAP_Y * h
 
-    // catalog top-row mode: a label + a number on top spread on ONE row
-    // ("Villa   34"), equal size, divider spanning the full content width
+    // catalog Villa-row: a label + a number on top spread on ONE row
     const topRowPair =
       top.length === 2 &&
       top.filter((m) => m.role === 'number').length === 1 &&
@@ -182,30 +190,31 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
 
     if (topRowPair) {
       const rowUnit = 1.7
-      const row = top.map((m) => ({ ...m, unit: rowUnit }))
+      const row = mode === 'canonical' ? top.map((m) => ({ ...m, unit: rowUnit })) : top
       const num = row.find((m) => m.role === 'number')!
       const other = row.find((m) => m.role !== 'number')!
-      // Arabic reads right-to-left: the label goes right, the number left
       const labelRight = hasArabic(other.el.text)
-      const CW = WIDTH_FILL * w
+      const CW = mode === 'canonical' ? WIDTH_FILL * w : Math.max(WIDTH_FILL * w, blockWidth(bottom, userHeights))
       const midGap = 0.06 * w
 
-      let s = Infinity
-      const rowInk = rowUnit * Math.max(...row.map((m) => m.inkPerRef))
-      const unitsH = rowInk + stackUnits(bottom)
-      const gapsH = gapY + div.thickness + (bottom.length ? gapY : 0)
-      s = Math.min(s, (HEIGHT_FILL * h - gapsH) / unitsH)
-      s = Math.min(s, (CW - midGap) / (num.aspect * rowUnit + other.aspect * rowUnit))
-      for (const m of bottom) s = Math.min(s, CW / (m.aspect * ratioOf(m)))
-      s = Math.min(s, (NUMBER_CAP * h) / rowUnit)
-      for (const m of bottom) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
-      if (opts.respectSizes) {
-        const sHard = Math.min((0.9 * h - gapsH) / unitsH, (0.94 * w - midGap) / ((num.aspect + other.aspect) * rowUnit))
-        s = Math.max(s, Math.min(userScale([row, bottom]), sHard))
+      let H: HeightOf
+      if (mode === 'layout') {
+        H = userHeights
+      } else {
+        let s = Infinity
+        const rowInkUnits = rowUnit * Math.max(...row.map((m) => m.inkPerRef))
+        const unitsH = rowInkUnits + stackUnits(bottom)
+        const gapsH = gapY + div.thickness + (bottom.length ? gapY : 0)
+        s = Math.min(s, (HEIGHT_FILL * h - gapsH) / unitsH)
+        s = Math.min(s, (CW - midGap) / (num.aspect * rowUnit + other.aspect * rowUnit))
+        for (const m of bottom) s = Math.min(s, CW / (m.aspect * ratioOf(m)))
+        s = Math.min(s, (NUMBER_CAP * h) / rowUnit)
+        for (const m of bottom) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
+        H = scaled(s)
       }
 
-      const rowH = rowInk * s
-      const hB = stackHeightMm(bottom, s)
+      const rowH = Math.max(...row.map((m) => H(m) * m.inkPerRef))
+      const hB = stackExtent(bottom, H)
       const total = rowH + gapY + div.thickness + (bottom.length ? gapY : 0) + hB
       const y0 = (h - total) / 2
       const cyRow = y0 + rowH / 2
@@ -216,57 +225,54 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
       const xR = (w + CW) / 2
       const leftM = labelRight ? num : other
       const rightM = labelRight ? other : num
-      const slotOf = (m: Measured) => f1(rowUnit * s)
-      patches[leftM.el.id] = { x: r1(xL + (leftM.aspect * slotOf(leftM)) / 2), y: r1(cyRow), heightMm: slotOf(leftM) }
-      patches[rightM.el.id] = { x: r1(xR - (rightM.aspect * slotOf(rightM)) / 2), y: r1(cyRow), heightMm: slotOf(rightM) }
-      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(CW) }
-      placeStack(bottom, s, w / 2, cyB, patches)
+      patches[leftM.el.id] = { x: r1(xL + (leftM.aspect * H(leftM)) / 2), y: r1(cyRow), heightMm: r1(H(leftM)) }
+      patches[rightM.el.id] = { x: r1(xR - (rightM.aspect * H(rightM)) / 2), y: r1(cyRow), heightMm: r1(H(rightM)) }
+      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(mode === 'layout' ? div.length : CW) }
+      placeStack(bottom, H, w / 2, cyB, patches)
     } else {
-      const unitsH = stackUnits(top) + stackUnits(bottom)
-      const gapsH = (top.length ? gapY : 0) + (bottom.length ? gapY : 0) + div.thickness
-      let s = unitsH > 0 ? (HEIGHT_FILL * h - gapsH) / unitsH : 1
-      for (const m of measured) {
-        s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
-        s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
-      }
-      if (opts.respectSizes) {
-        let sHard = unitsH > 0 ? (0.92 * h - gapsH) / unitsH : s
+      let H: HeightOf
+      if (mode === 'layout') {
+        H = userHeights
+      } else {
+        const unitsH = stackUnits(top) + stackUnits(bottom)
+        const gapsH = (top.length ? gapY : 0) + (bottom.length ? gapY : 0) + div.thickness
+        let s = unitsH > 0 ? (HEIGHT_FILL * h - gapsH) / unitsH : 1
         for (const m of measured) {
-          sHard = Math.min(sHard, (0.92 * w) / (m.aspect * ratioOf(m)))
-          sHard = Math.min(sHard, ((m.role === 'number' ? 0.38 : 0.5) * h) / ratioOf(m))
+          s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
+          s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
         }
-        s = Math.max(s, Math.min(userScale([top, bottom]), sHard))
+        H = scaled(s)
       }
 
-      const hT = stackHeightMm(top, s)
-      const hB = stackHeightMm(bottom, s)
+      const hT = stackExtent(top, H)
+      const hB = stackExtent(bottom, H)
       const total = hT + (top.length ? gapY : 0) + div.thickness + (bottom.length ? gapY : 0) + hB
       const y0 = (h - total) / 2
       const cyT = y0 + hT / 2
       const divY = y0 + hT + (top.length ? gapY : 0) + div.thickness / 2
       const cyB = y0 + hT + (top.length ? gapY : 0) + div.thickness + (bottom.length ? gapY : 0) + hB / 2
 
-      // divider matches the wider block of content beside it
-      const divLen = clamp(Math.max(blockWidthMm(top, s), blockWidthMm(bottom, s)) * 1.05, 0.3 * w, 0.85 * w)
+      const divLen = mode === 'layout' ? div.length : clamp(Math.max(blockWidth(top, H), blockWidth(bottom, H)) * 1.05, 0.3 * w, 0.85 * w)
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(divLen) }
-      placeStack(top, s, w / 2, cyT, patches)
-      placeStack(bottom, s, w / 2, cyB, patches)
+      placeStack(top, H, w / 2, cyT, patches)
+      placeStack(bottom, H, w / 2, cyB, patches)
     }
   } else {
     // ---- no divider: one centered stack ----
     const lines = [...measured].sort(byY)
     if (lines.length) {
-      let s = (0.65 * h) / stackUnits(lines)
-      for (const m of lines) {
-        s = Math.min(s, (0.72 * w) / (m.aspect * ratioOf(m)))
-        s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
+      let H: HeightOf
+      if (mode === 'layout') {
+        H = userHeights
+      } else {
+        let s = (0.65 * h) / stackUnits(lines)
+        for (const m of lines) {
+          s = Math.min(s, (0.72 * w) / (m.aspect * ratioOf(m)))
+          s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
+        }
+        H = scaled(s)
       }
-      if (opts.respectSizes) {
-        let sHard = (0.9 * h) / stackUnits(lines)
-        for (const m of lines) sHard = Math.min(sHard, (0.92 * w) / (m.aspect * ratioOf(m)))
-        s = Math.max(s, Math.min(userScale([lines]), sHard))
-      }
-      placeStack(lines, s, w / 2, h / 2, patches)
+      placeStack(lines, H, w / 2, h / 2, patches)
     }
   }
   return patches

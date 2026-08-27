@@ -275,8 +275,8 @@ export function PropertiesPanel() {
             </button>
           </div>
           <p className="hint">
-            Reads your intent and makes it crisp: your sizes stay, your divider stays where you put it (snapped to exact center only when
-            it's already close), text centers in its side, spacing evens out, and only what overflows gets shrunk.
+            You size, it lays out: your text sizes are NEVER touched. The button only does geometry — tight clean spacing, blocks centered
+            beside the divider, divider matched to the content, everything centered on the board.
           </p>
           <p className="hint">Shift-click for multi-select, drag empty canvas to box-select, Ctrl+C/V copy &amp; paste. Arrows nudge 1mm (Shift = 5mm).</p>
         </>
