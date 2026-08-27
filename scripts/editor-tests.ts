@@ -71,5 +71,25 @@ s().select(null)
 s().select(a)
 check(s().selectedIds.length === 1, 'after ungroup, clicking selects just the one element')
 
+// --- board-centering moves the selection as ONE unit (the old behavior
+// slammed every member onto the center line, piling groups up) ---
+s().select(null)
+s().updateEl(a, { x: 60, y: 40 })
+s().updateEl(b, { x: 140, y: 90 })
+s().addDivider()
+const dv = ids()[ids().length - 1]
+s().updateEl(dv, { x: 100, y: 65 })
+s().selectMany([a, b, dv])
+s().alignSelected('board-h')
+s().alignSelected('board-v')
+check(Math.abs(el(a).x - el(b).x - (60 - 140)) < 0.11, 'centering keeps the horizontal arrangement')
+check(Math.abs(el(a).y - el(b).y - (40 - 90)) < 0.11, 'centering keeps the vertical arrangement')
+check(Math.abs(el(a).x - el(dv).x - (60 - 100)) < 0.11 && Math.abs(el(a).y - el(dv).y - (40 - 65)) < 0.11, 'divider rides with the unit')
+check(Math.abs(el(a).x - el(b).x) > 10, 'members not piled onto one line')
+// Same X / Same Y still collapse to a shared axis - that is their job
+s().selectMany([a, b])
+s().alignSelected('match-x')
+check(Math.abs(el(a).x - el(b).x) < 0.11, 'Same X still unifies the axis')
+
 console.log(failures === 0 ? '\nGROUPING: ALL GREEN' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

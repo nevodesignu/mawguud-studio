@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useStudio, hasClipboard } from '../store/studio'
 import { shapedSync } from '../shaping/service'
-import { renderTextEl } from './textRender'
+import { bboxOf, renderTextEl, type Box } from './textRender'
 import { multiToD, barRing, roundedRectRing, circleRing, nearestOnRing } from '../geom/poly'
 import type { TextEl, DividerEl, El } from '../model'
 import { boltCenters } from '../model'
@@ -32,27 +32,6 @@ interface DragState {
   baseSelection?: string[]
 }
 
-interface Box {
-  x: number
-  y: number
-  w: number
-  h: number
-}
-
-/** Design-space bounding box of an element (uses the shaping cache for text). */
-function bboxOf(el: El): Box {
-  if (el.kind === 'divider') {
-    const w = el.vertical ? el.thickness : el.length
-    const h = el.vertical ? el.length : el.thickness
-    return { x: el.x - w / 2, y: el.y - h / 2, w, h }
-  }
-  const shaped = shapedSync(el.fontId, el.text, el.spacingEm)
-  if (shaped) {
-    const r = renderTextEl(el, shaped)
-    if (r) return r.bboxMm
-  }
-  return { x: el.x - 25, y: el.y - 6, w: 50, h: 12 }
-}
 
 const boxesIntersect = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 

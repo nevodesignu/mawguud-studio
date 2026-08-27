@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Design, El, TextEl, SignSpec, FinalizeSettings, TemplateSpec } from '../model'
 import { templateCatalog, makeFromSpec, makeBlank, makeDesign, normalizeDesign, uid, botElements, signFromSpec, specName } from '../model'
 import { arrangeDesign, optimizeNameSplits } from '../layout/arrange'
+import { bboxOf } from '../ui/textRender'
 import type { MultiPoly, Pt } from '../geom/types'
 import { bboxOfMulti } from '../geom/types'
 import type { Bridge } from '../geom/bridges'
@@ -423,14 +424,32 @@ export const useStudio = create<StudioState>((set, get) => ({
     const { selectedIds, design } = get()
     if (!selectedIds.length) return
     const sel = design.elements.filter((e) => selectedIds.includes(e.id))
+    if (op === 'board-h' || op === 'board-v') {
+      // centering a selection moves it as ONE unit: the combined ink bbox
+      // lands on the board center, the arrangement inside stays intact
+      // (each element slamming onto the center line piled groups up)
+      const boxes = sel.map(bboxOf)
+      const min = Math.min(...boxes.map((b) => (op === 'board-h' ? b.x : b.y)))
+      const max = Math.max(...boxes.map((b) => (op === 'board-h' ? b.x + b.w : b.y + b.h)))
+      const delta = (op === 'board-h' ? design.sign.w : design.sign.h) / 2 - (min + max) / 2
+      get().mutate((d) => {
+        for (const el of d.elements) {
+          if (!selectedIds.includes(el.id)) continue
+          if (op === 'board-h') el.x = Math.round((el.x + delta) * 10) / 10
+          else el.y = Math.round((el.y + delta) * 10) / 10
+          if (el.kind === 'text') el.placed = true
+        }
+      })
+      return
+    }
     const avg = (vals: number[]) => vals.reduce((a, b) => a + b, 0) / vals.length
-    const targetX = op === 'board-h' ? design.sign.w / 2 : avg(sel.map((e) => e.x))
-    const targetY = op === 'board-v' ? design.sign.h / 2 : avg(sel.map((e) => e.y))
+    const targetX = avg(sel.map((e) => e.x))
+    const targetY = avg(sel.map((e) => e.y))
     get().mutate((d) => {
       for (const el of d.elements) {
         if (!selectedIds.includes(el.id)) continue
-        if (op === 'board-h' || op === 'match-x') el.x = Math.round(targetX * 10) / 10
-        if (op === 'board-v' || op === 'match-y') el.y = Math.round(targetY * 10) / 10
+        if (op === 'match-x') el.x = Math.round(targetX * 10) / 10
+        if (op === 'match-y') el.y = Math.round(targetY * 10) / 10
         if (el.kind === 'text') el.placed = true
       }
     })
