@@ -219,9 +219,12 @@ export function addBridges(
       .sort((h1, h2) => ringArea(h2) - ringArea(h1))
 
     const placedRects: Ring[] = []
+    const usedKeys = new Set<string>()
 
     for (const hole of big) {
-      const key = holeKey(elId, hole, originX, originY)
+      let key = holeKey(elId, hole, originX, originY)
+      while (usedKeys.has(key)) key += "'" // two holes can round to the same centroid
+      usedKeys.add(key)
       const centroid = ringCentroid(hole)
       const otherHoles = big.filter((h) => h !== hole)
       const overrideT = overrides[key]

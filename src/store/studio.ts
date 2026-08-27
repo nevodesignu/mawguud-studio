@@ -67,7 +67,7 @@ interface StudioState {
 
   copySelected(): void
   cutSelected(): void
-  paste(): void
+  paste(at?: { x: number; y: number }): void
   moveSelected(dx: number, dy: number): void
   removeSelected(): void
   duplicateSelected(): void
@@ -94,6 +94,8 @@ interface StudioState {
 
 const clone = (d: Design): Design => JSON.parse(JSON.stringify(d))
 const cloneEls = (els: El[]): El[] => JSON.parse(JSON.stringify(els))
+
+export const hasClipboard = () => clipboard.length > 0
 
 let past: Design[] = []
 let future: Design[] = []
@@ -209,6 +211,9 @@ export const useStudio = create<StudioState>((set, get) => ({
     if (get().mode === 'finalize') void get().runFinalize()
   },
   beginGesture: () => {
+    // self-heal: a dangling snapshot (a drag whose pointerup never arrived)
+    // must not silently block history forever - commit it and move on
+    if (gestureSnapshot) pushHistory(gestureSnapshot)
     gestureSnapshot = clone(get().design)
   },
   endGesture: (commit = true) => {
@@ -307,16 +312,27 @@ export const useStudio = create<StudioState>((set, get) => ({
     get().copySelected()
     get().removeSelected()
   },
-  paste: () => {
+  paste: (at) => {
     if (!clipboard.length) return
-    pasteN++
-    const off = 8 * pasteN
+    let dx: number
+    let dy: number
+    if (at) {
+      // paste centered on the given point (context-menu "Paste here")
+      const cx = clipboard.reduce((a, el) => a + el.x, 0) / clipboard.length
+      const cy = clipboard.reduce((a, el) => a + el.y, 0) / clipboard.length
+      dx = at.x - cx
+      dy = at.y - cy
+    } else {
+      pasteN++
+      dx = 8 * pasteN
+      dy = 8 * pasteN
+    }
     const ids: string[] = []
     get().mutate((d) => {
       for (const el of cloneEls(clipboard)) {
         el.id = uid()
-        el.x += off
-        el.y += off
+        el.x = Math.round((el.x + dx) * 10) / 10
+        el.y = Math.round((el.y + dy) * 10) / 10
         ids.push(el.id)
         d.elements.push(el)
       }

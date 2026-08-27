@@ -400,6 +400,48 @@ body {
   border-color: rgba(47, 214, 181, 0.4);
 }
 
+.ctx-menu {
+  position: absolute;
+  z-index: 20;
+  min-width: 160px;
+  background: rgba(16, 19, 24, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 5px;
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  animation: pop-in 0.12s ease;
+}
+
+.ctx-item {
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 7px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.ctx-item:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  transform: none;
+}
+
+.ctx-item:disabled {
+  opacity: 0.35;
+}
+
+.ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 8px;
+}
+
 .inline-edit {
   position: absolute;
   transform: translate(-50%, -50%);

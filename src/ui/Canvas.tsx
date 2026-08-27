@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useStudio } from '../store/studio'
+import { useStudio, hasClipboard } from '../store/studio'
 import { shapedSync } from '../shaping/service'
 import { renderTextEl } from './textRender'
 import { multiToD, barRing, roundedRectRing, circleRing, nearestOnRing } from '../geom/poly'
@@ -71,9 +71,12 @@ export function Canvas() {
   const wrapRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<DragState | null>(null)
+  const onPointerUpRef = useRef<() => void>(() => {})
   const [guides, setGuides] = useState<{ v: number | null; h: number | null }>({ v: null, h: null })
   const [marquee, setMarquee] = useState<Box | null>(null)
   const [editing, setEditing] = useState<{ id: string; original: string } | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{ sx: number; sy: number; wx: number; wy: number } | null>(null)
+  const lastTapRef = useRef<{ elId: string; time: number; x: number; y: number } | null>(null)
 
   const closeEditor = useCallback((commit: boolean) => {
     setEditing((cur) => {
@@ -203,12 +206,29 @@ export function Canvas() {
           break
       }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // capture phase: nothing in the page can swallow the shortcuts before us
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // drags must ALWAYS end, even when pointerup lands outside the canvas or
+  // pointer capture silently failed (embedded browser panes do this)
+  useEffect(() => {
+    const finish = () => {
+      if (dragRef.current) onPointerUpRef.current()
+    }
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    window.addEventListener('blur', finish)
+    return () => {
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+    }
   }, [])
 
   const onDoubleClick = (e: React.MouseEvent) => {
-    if (mode !== 'design') return
+    if (mode !== 'design' || editing) return
     const elId = (e.target as SVGElement).getAttribute('data-elid')
     if (!elId) return
     const el = useStudio.getState().design.elements.find((x) => x.id === elId)
@@ -228,7 +248,16 @@ export function Canvas() {
       /* synthetic or already-released pointers have no capturable id */
     }
 
-    if (e.button === 1 || e.button === 2) {
+    if (e.button === 2) {
+      // right-click: context menu (select what's under the cursor first)
+      const overId = target.getAttribute('data-elid')
+      if (overId && !s.selectedIds.includes(overId)) s.select(overId)
+      const rect = wrapRef.current!.getBoundingClientRect()
+      setCtxMenu({ sx: e.clientX - rect.left, sy: e.clientY - rect.top, wx, wy })
+      return
+    }
+    setCtxMenu(null)
+    if (e.button === 1) {
       dragRef.current = { kind: 'pan', startWX: wx, startWY: wy, startPanX: s.panX, startPanY: s.panY, startClientX: e.clientX, startClientY: e.clientY }
       return
     }
@@ -304,6 +333,21 @@ export function Canvas() {
       if (additive) {
         s.select(elId, true)
         return
+      }
+      // manual double-click detection - embedded panes don't always deliver
+      // native dblclick events
+      const now = performance.now()
+      const last = lastTapRef.current
+      lastTapRef.current = { elId, time: now, x: e.clientX, y: e.clientY }
+      if (last && last.elId === elId && now - last.time < 420 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 8) {
+        const el = s.design.elements.find((x) => x.id === elId)
+        if (el && el.kind === 'text') {
+          lastTapRef.current = null
+          s.select(elId)
+          s.beginGesture()
+          setEditing({ id: elId, original: el.text })
+          return
+        }
       }
       if (!s.selectedIds.includes(elId)) s.select(elId)
       const ids = useStudio.getState().selectedIds
@@ -449,6 +493,7 @@ export function Canvas() {
     setGuides({ v: null, h: null })
     setMarquee(null)
   }
+  onPointerUpRef.current = onPointerUp
 
   const { sign } = design
   const outlineD = multiToD([[roundedRectRing(0, 0, sign.w, sign.h, sign.radius)]])
@@ -534,6 +579,44 @@ export function Canvas() {
           {guides.h !== null && <line x1={-20} y1={guides.h} x2={sign.w + 20} y2={guides.h} className="guide" strokeWidth={px(1)} />}
         </g>
       </svg>
+      {ctxMenu &&
+        (() => {
+          const s = useStudio.getState()
+          const sel = design.elements.filter((el) => selectedIds.includes(el.id))
+          const singleText = sel.length === 1 && sel[0].kind === 'text' ? (sel[0] as TextEl) : null
+          const close = () => setCtxMenu(null)
+          const item = (label: string, fn: () => void, disabled = false) => (
+            <button
+              key={label}
+              className="ctx-item"
+              disabled={disabled}
+              onClick={() => {
+                fn()
+                close()
+              }}
+            >
+              {label}
+            </button>
+          )
+          return (
+            <div className="ctx-menu" style={{ left: Math.min(ctxMenu.sx, (wrapRef.current?.clientWidth ?? 400) - 170), top: Math.min(ctxMenu.sy, (wrapRef.current?.clientHeight ?? 400) - 280) }}>
+              {mode === 'design' && singleText &&
+                item('Edit text', () => {
+                  s.beginGesture()
+                  setEditing({ id: singleText.id, original: singleText.text })
+                })}
+              {mode === 'design' && sel.length > 0 && item('Copy', () => s.copySelected())}
+              {mode === 'design' && sel.length > 0 && item('Cut', () => s.cutSelected())}
+              {mode === 'design' && item('Paste here', () => s.paste({ x: ctxMenu.wx, y: ctxMenu.wy }), !hasClipboard())}
+              {mode === 'design' && sel.length > 0 && item('Duplicate', () => s.duplicateSelected())}
+              {mode === 'design' && sel.length > 0 && item('Delete', () => s.removeSelected())}
+              <div className="ctx-sep" />
+              {item('Undo', () => s.undo())}
+              {item('Redo', () => s.redo())}
+              {mode === 'design' && item('✨ Perfect it', () => void s.autoArrange())}
+            </div>
+          )
+        })()}
       {editing &&
         (() => {
           const el = design.elements.find((x) => x.id === editing.id)
