@@ -237,7 +237,10 @@ async function sizingSovereignty() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
   const base = makeDesign('sov', signFromSpec(sp), botElements(sp, [['Villa', '180'], ['المهندس عبيد محمد']]))
   const t = (design: Design, txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  // arrange canonically first, like a real session: the base floor is defined
+  // for the arrangement the design actually has (villa-row here)
   const canonPatches = await arrangeDesign(JSON.parse(JSON.stringify(base)), { mode: 'canonical' })
+  for (const el of base.elements) Object.assign(el, canonPatches[el.id] ?? {})
   const canonName = canonPatches[t(base, 'المهندس عبيد محمد').id]?.heightMm ?? 0
   const canonNum = canonPatches[t(base, '180').id]?.heightMm ?? 0
   const label = 'SOVEREIGNTY Villa/180'
@@ -258,129 +261,127 @@ async function sizingSovereignty() {
 }
 
 /**
- * PLACEMENT SOVEREIGNTY, final form (owner 2026-08-27: "just let me place it
- * where i want ... but make sure its alginened correctly" + "the whole thing
- * grouped and centered, text + divider"): a hand-placed element (placed flag,
- * set on any drag/arrow/X-Y edit) owns its position RELATIVE to the group -
- * the engine never rearranges the user's layout, the element's stack
- * translates onto it with spacing intact, alignment laws anchor on it - and
- * at the end the WHOLE ensemble re-centers on the board as one group
- * (LAW 21). Bot canonical resets the flags.
+ * PERFECT-IT = CLEAN UP MY ARRANGEMENT (owner 2026-08-27, final: "the perfect
+ * it button doesnt work, plan it all over"). The user's current positions are
+ * the spec - side of the divider, block membership, line order, block
+ * position. The engine perfects the geometry: tight ink spacing, one X per
+ * column, level rows, divider re-fit mid-gap, whole ensemble centered.
  */
-async function placementSovereignty() {
-  const label = 'PLACEMENT SOVEREIGNTY'
+async function perfectItCleanup() {
+  const label = 'PERFECT-IT CLEANUP'
   const centered = async (design: Design, w: number, h: number, what: string) => {
     const { texts, div } = await placed(design)
     const allL = Math.min(...texts.map((t) => t.left), div ? (div.vertical ? div.x - div.thickness / 2 : div.x - div.length / 2) : Infinity)
     const allR = Math.max(...texts.map((t) => t.right), div ? (div.vertical ? div.x + div.thickness / 2 : div.x + div.length / 2) : -Infinity)
     const allT = Math.min(...texts.map((t) => t.top), div ? (div.vertical ? div.y - div.length / 2 : div.y - div.thickness / 2) : Infinity)
     const allB = Math.max(...texts.map((t) => t.bottom), div ? (div.vertical ? div.y + div.length / 2 : div.y + div.thickness / 2) : -Infinity)
-    assert(Math.abs((allL + allR) / 2 - w / 2) <= Math.max(0.8, 0.015 * w), label, `${what}: group off-center horizontally: ${((allL + allR) / 2).toFixed(1)} vs ${w / 2}`)
-    assert(Math.abs((allT + allB) / 2 - h / 2) <= Math.max(0.8, 0.02 * h), label, `${what}: group off-center vertically: ${((allT + allB) / 2).toFixed(1)} vs ${h / 2}`)
+    assert(Math.abs((allL + allR) / 2 - w / 2) <= Math.max(0.8, 0.015 * w), label, `${what}: group off-center horizontally: ${((allL + allR) / 2).toFixed(1)}`)
+    assert(Math.abs((allT + allB) / 2 - h / 2) <= Math.max(0.8, 0.02 * h), label, `${what}: group off-center vertically: ${((allT + allB) / 2).toFixed(1)}`)
   }
-
   const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
-  const design = makeDesign('psov', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
-  const t = (txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
-  const apply = async (mode: 'layout' | 'canonical') => {
-    const patches = await arrangeDesign(design, { mode })
+  const fresh = async () => {
+    const design = makeDesign('cleanup', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
+    const patches = await arrangeDesign(design, { mode: 'canonical' })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+    return design
+  }
+  const applyLayout = async (design: Design) => {
+    const patches = await arrangeDesign(design, { mode: 'layout' })
     for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
   }
-  await apply('canonical')
-  assert(design.elements.every((e) => e.kind !== 'text' || !e.placed), label, 'bot output left placed flags set')
+  const t = (design: Design, txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
 
-  // drag the bottom name line FAR off - way beyond any nudge threshold. The
-  // user's arrangement (offset vs the untouched other column) must survive;
-  // the whole group then re-centers on the board.
-  const name2 = t('اسلام')
-  const name1 = t('م/يحيي')
-  const num = t('20')
-  const partnerIdealDX = name1.x - name2.x
-  const partnerIdealDY = name1.y - name2.y
-  name2.x -= 40
-  name2.y += 28
-  name2.placed = true
-  const wantOffX = name2.x - num.x
-  const wantOffY = name2.y - num.y
-  await apply('layout')
-  assert(Math.abs(name2.x - num.x - wantOffX) < 0.3 && Math.abs(name2.y - num.y - wantOffY) < 0.3, label, `user arrangement not preserved: off (${(name2.x - num.x).toFixed(1)},${(name2.y - num.y).toFixed(1)}) vs (${wantOffX.toFixed(1)},${wantOffY.toFixed(1)})`)
-  // shared X is exact (law 12); the stack gap re-derives from ink extents, so
-  // it may settle a few mm off the canonical snapshot (which law 14 had tweaked)
-  assert(Math.abs(name1.x - name2.x - partnerIdealDX) < 0.25, label, `stack did not follow in X: partner at ${name1.x} vs anchor ${name2.x}`)
-  assert(Math.abs(name1.y - name2.y - partnerIdealDY) < 5, label, `stack spacing broken: dy=${(name1.y - name2.y).toFixed(1)} vs ideal ${partnerIdealDY.toFixed(1)}`)
-  await centered(design, 400, 200, 'dragged stack')
-  // idempotence: a second Perfect-it changes nothing
-  const snapX = name2.x
-  const snapPartnerY = name1.y
-  await apply('layout')
-  assert(Math.abs(name2.x - snapX) < 0.25 && Math.abs(name1.y - snapPartnerY) < 0.25, label, 'not idempotent under placed flags')
+  // 1. a messy design comes out aligned: jitter every line, Perfect-it
+  const d1 = await fresh()
+  t(d1, 'م/يحيي').x += 4
+  t(d1, 'م/يحيي').y -= 3
+  t(d1, 'اسلام').x -= 6
+  t(d1, 'اسلام').y += 5
+  t(d1, 'شقة').x += 3
+  t(d1, '20').y += 6
+  const h1 = t(d1, 'م/يحيي').heightMm
+  await applyLayout(d1)
+  assert(Math.abs(t(d1, 'م/يحيي').x - t(d1, 'اسلام').x) < 0.11, label, `messy column did not share X: ${t(d1, 'م/يحيي').x} vs ${t(d1, 'اسلام').x}`)
+  assert(Math.abs(t(d1, 'شقة').x - t(d1, '20').x) < 0.11, label, `label/number column did not share X`)
+  assert(Math.abs(t(d1, 'م/يحيي').heightMm - h1) < 0.11, label, 'cleanup touched a size')
+  await centered(d1, 400, 200, 'messy cleanup')
+  // idempotence: hammering the button changes nothing
+  const snap = d1.elements.map((e) => [e.x, e.y] as const)
+  await applyLayout(d1)
+  d1.elements.forEach((e, i) => {
+    assert(Math.abs(e.x - snap[i][0]) <= 0.15 && Math.abs(e.y - snap[i][1]) <= 0.15, label, `not idempotent: element ${i} moved ${snap[i]} -> (${e.x},${e.y})`)
+  })
 
-  // a lone hand-placed number: its offset vs the untouched name survives, and
-  // the ensemble re-centers as one group
-  const sp2: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 250, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'corners', divThick: 2.85 }
-  const d2 = makeDesign('psov2', signFromSpec(sp2), botElements(sp2, [['34'], ['المهندس عبيد محمد']]))
-  const t2 = (txt: string) => d2.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
-  const apply2 = async (mode: 'layout' | 'canonical') => {
-    const patches = await arrangeDesign(d2, { mode })
-    for (const el of d2.elements) Object.assign(el, patches[el.id] ?? {})
+  // 2. a dragged BLOCK stays where the user put it (relative to the rest)
+  const d2 = await fresh()
+  t(d2, 'م/يحيي').y += 25
+  t(d2, 'اسلام').y += 25
+  const wantDrop = 25
+  const beforeGap = (t(d2, 'م/يحيي').y + t(d2, 'اسلام').y) / 2 - (t(d2, 'شقة').y + t(d2, '20').y) / 2
+  await applyLayout(d2)
+  const afterGap = (t(d2, 'م/يحيي').y + t(d2, 'اسلام').y) / 2 - (t(d2, 'شقة').y + t(d2, '20').y) / 2
+  assert(Math.abs(afterGap - beforeGap) < 3, label, `dragged block offset not preserved: ${afterGap.toFixed(1)} vs ${beforeGap.toFixed(1)}`)
+  assert(afterGap > wantDrop / 2, label, `dragged block snapped back: offset ${afterGap.toFixed(1)}`)
+  await centered(d2, 400, 200, 'dragged block')
+
+  // 3. a line dragged across the divider JOINS the other column
+  const d3 = await fresh()
+  const divX3 = d3.elements.find((e) => e.kind === 'divider')!.x
+  t(d3, 'اسلام').x = divX3 - 60 // now left of the line
+  await applyLayout(d3)
+  assert(Math.abs(t(d3, 'اسلام').x - t(d3, 'شقة').x) < 0.11, label, `moved line did not join the left column: ${t(d3, 'اسلام').x} vs ${t(d3, 'شقة').x}`)
+  assert(t(d3, 'م/يحيي').x > d3.elements.find((e) => e.kind === 'divider')!.x, label, 'remaining line lost its side')
+
+  // 4. dragging a line above its sibling REORDERS the stack
+  const d4 = await fresh()
+  t(d4, 'اسلام').y = t(d4, 'م/يحيي').y - 30 // اسلام now on top
+  await applyLayout(d4)
+  assert(t(d4, 'اسلام').y < t(d4, 'م/يحيي').y, label, `stack order not taken from the user: اسلام ${t(d4, 'اسلام').y} vs م/يحيي ${t(d4, 'م/يحيي').y}`)
+
+  // 5. the divider re-fits into the actual gap and never touches text
+  const d5 = await fresh()
+  t(d5, 'م/يحيي').x -= 25
+  t(d5, 'اسلام').x -= 25
+  await applyLayout(d5)
+  const { texts: t5, div: div5 } = await placed(d5)
+  assert(div5 !== null, label, 'divider vanished')
+  if (div5) {
+    for (const tx of t5) {
+      const gapX = Math.max(div5.x - div5.thickness / 2 - tx.right, tx.left - (div5.x + div5.thickness / 2))
+      assert(gapX >= 1 || tx.top > div5.y + div5.length / 2 || tx.bottom < div5.y - div5.length / 2, label, `"${tx.el.text}" touches the re-fit divider (gap ${gapX.toFixed(1)})`)
+    }
   }
-  await apply2('canonical')
-  const num2 = t2('34')
-  const bigName = t2('المهندس عبيد محمد')
-  num2.x -= 70
-  num2.y -= 20
-  num2.placed = true
-  const off2X = num2.x - bigName.x
-  const off2Y = num2.y - bigName.y
-  await apply2('layout')
-  assert(Math.abs(num2.x - bigName.x - off2X) < 0.3 && Math.abs(num2.y - bigName.y - off2Y) < 0.3, label, `lone placed offset not preserved: (${(num2.x - bigName.x).toFixed(1)},${(num2.y - bigName.y).toFixed(1)}) vs (${off2X.toFixed(1)},${off2Y.toFixed(1)})`)
-  await centered(d2, 400, 250, 'lone placed number')
 
-  // law 14 anchors on the user: an unplaced line lands NEAR a placed one ->
-  // it snaps to the USER's row, and the weld survives the group-centering ride
-  const d3 = makeDesign('psov3', signFromSpec(sp), botElements(sp, [['أحمد', 'محمود'], ['منى', 'سارة']]))
-  const t3 = (txt: string) => d3.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
-  const apply3 = async (mode: 'layout' | 'canonical') => {
-    const patches = await arrangeDesign(d3, { mode })
-    for (const el of d3.elements) Object.assign(el, patches[el.id] ?? {})
+  // 6. one-sided sign: everything dragged into one column - idempotent, and
+  // the divider rides beside the lone block instead of floating away
+  const d6 = await fresh()
+  const div6 = d6.elements.find((e) => e.kind === 'divider')!
+  t(d6, 'شقة').x = div6.x + 50
+  t(d6, '20').x = div6.x + 55
+  await applyLayout(d6)
+  const snap6 = d6.elements.map((e) => [e.x, e.y] as const)
+  await applyLayout(d6)
+  d6.elements.forEach((e, i) => {
+    assert(Math.abs(e.x - snap6[i][0]) <= 0.15 && Math.abs(e.y - snap6[i][1]) <= 0.15, label, `one-sided not idempotent: element ${i} moved (${snap6[i]}) -> (${e.x},${e.y})`)
+  })
+  const { texts: t6, div: div6f } = await placed(d6)
+  if (div6f) {
+    const blockLeft = Math.min(...t6.map((x) => x.left))
+    const gap6 = blockLeft - (div6f.x + div6f.thickness / 2)
+    assert(gap6 > 5 && gap6 < 0.1 * 400, label, `divider not riding beside the lone block: gap ${gap6.toFixed(1)}mm`)
   }
-  await apply3('canonical')
-  const ahmed = t3('أحمد')
-  ahmed.y -= 4 // user parks their line just off the partner's row
-  ahmed.x -= 3
-  ahmed.placed = true
-  const gapToSibling = t3('محمود').y - ahmed.y
-  await apply3('layout')
-  assert(Math.abs(t3('منى').y - ahmed.y) < 0.11, label, `law 14 did not weld the row to the user's line: ${t3('منى').y} vs ${ahmed.y}`)
-  // the ink-derived stack gap may settle a few mm off the canonical snapshot
-  assert(Math.abs(t3('محمود').y - ahmed.y - gapToSibling) < 5, label, `user's column arrangement drifted: gap ${(t3('محمود').y - ahmed.y).toFixed(1)} vs ${gapToSibling.toFixed(1)}`)
+
+  // 7. a label the user STACKED over its number stays a stack - the villa-row
+  // heuristic must not flatten it onto one line
+  const spUD: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'corners', divThick: 2.85 }
+  const d7 = makeDesign('cleanup7', signFromSpec(spUD), botElements(spUD, [['شقة', '20'], ['المهندس عبيد محمد']]))
+  // botElements seeds the pair stacked; Perfect-it on the raw seed must keep it stacked
+  await applyLayout(d7)
+  const dy7 = Math.abs(t(d7, 'شقة').y - t(d7, '20').y)
+  assert(dy7 > 10, label, `stacked label/number pair was flattened onto one line (dy=${dy7.toFixed(1)})`)
+  assert(Math.abs(t(d7, 'شقة').x - t(d7, '20').x) < 0.11, label, 'stacked pair lost its shared X')
 }
 
-/**
- * Nudge preservation, relative form: a small deliberate move survives
- * Perfect-it IN THE ARRANGEMENT (the group may translate to re-center per
- * law 21); a large displacement of an untouched element snaps back.
- */
-async function nudgeKeep() {
-  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
-  // one-column design: no cross-divider neighbours, so law-14 unification
-  // can never eat the nudge and we test pure nudge-keep mechanics
-  const design = makeDesign('nudge', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], []]))
-  const applyMode = async (mode: 'layout' | 'canonical') => {
-    const patches = await arrangeDesign(design, { mode })
-    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
-  }
-  await applyMode('canonical')
-  const line = design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'م/يحيي')!
-  const other = design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'اسلام')!
-  const gap0 = other.y - line.y
-  line.y -= 5 // "a bit upward" - the stack gap grows by 5
-  await applyMode('layout')
-  assert(Math.abs(other.y - line.y - (gap0 + 5)) < 0.25, 'NUDGE', `small nudge lost from the arrangement: gap ${(other.y - line.y).toFixed(1)} vs ${(gap0 + 5).toFixed(1)}`)
-  line.y -= 80 // thrown far off - an untouched element snaps back to proper placement
-  await applyMode('layout')
-  assert(Math.abs(other.y - line.y - (gap0 + 85)) > 5, 'NUDGE', 'large displacement was not re-placed')
-}
 
 /** Side bolts sit at mid-height: the horizontal divider must run on their axis. */
 async function boltAxisLaw() {
@@ -445,8 +446,12 @@ async function law14CrossAxis() {
   t('محمود').heightMm = 30
   const patches = await arrangeDesign(design, { mode: 'layout' })
   for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
-  assert(Math.abs(t('أحمد').y - t('منى').y) < 0.11, 'LAW 14', `cross-divider rows not unified: ${t('أحمد').y} vs ${t('منى').y}`)
-  assert(Math.abs(t('محمود').y - t('سارة').y) < 0.11, 'LAW 14', `cross-divider rows not unified (2nd): ${t('محمود').y} vs ${t('سارة').y}`)
+  // cleanup keeps blocks RIGID (spacing never bends), so unequal column
+  // extents settle CENTER-aligned: rows level as closely as geometry allows,
+  // and the block middles weld exactly
+  assert(Math.abs(t('أحمد').y - t('منى').y) < 3.5, 'LAW 14', `cross-divider rows not near: ${t('أحمد').y} vs ${t('منى').y}`)
+  assert(Math.abs(t('محمود').y - t('سارة').y) < 3.5, 'LAW 14', `cross-divider rows not near (2nd): ${t('محمود').y} vs ${t('سارة').y}`)
+  assert(Math.abs((t('أحمد').y + t('محمود').y) / 2 - (t('منى').y + t('سارة').y) / 2) < 0.15, 'LAW 14', `block centers not welded: ${((t('أحمد').y + t('محمود').y) / 2).toFixed(1)} vs ${((t('منى').y + t('سارة').y) / 2).toFixed(1)}`)
 }
 
 /** LAW 15: near-equal sibling sizes unify UP; clearly different sizes stay. */
@@ -627,8 +632,7 @@ async function main() {
   }
   await goldenMaster()
   await sizingSovereignty()
-  await placementSovereignty()
-  await nudgeKeep()
+  await perfectItCleanup()
   await boltAxisLaw()
   await law11BigText()
   await alignmentLaws()
