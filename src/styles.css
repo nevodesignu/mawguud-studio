@@ -455,6 +455,21 @@ input[type='checkbox'] {
   min-width: 0;
 }
 
+.size-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.size-card {
+  align-items: center;
+  padding: 12px 8px;
+}
+
+.size-card strong {
+  font-size: 15px;
+}
+
 .font-sample {
   height: 18px;
   width: 100%;

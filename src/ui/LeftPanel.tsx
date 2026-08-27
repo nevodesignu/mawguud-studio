@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useStudio } from '../store/studio'
-import { templates } from '../model'
+import { templateCatalog, finishLabel, layoutLabel, type Finish, type Layout } from '../model'
 import { addUploadedFont, removeUploadedFont, builtinFonts, listUploadedFonts } from '../fonts/catalog'
 import { evictFont, shapedSync } from '../shaping/service'
 import { renderTextEl } from './textRender'
@@ -27,15 +27,42 @@ export function LeftPanel() {
 
 function Templates() {
   const st = useStudio.getState()
+  const [finish, setFinish] = useState<Finish>('lighted')
+  const [layout, setLayout] = useState<Layout>('leftright')
+  const sizes = templateCatalog.filter((t) => t.finish === finish && t.layout === layout)
   return (
     <div className="list">
-      {templates.map((t) => (
-        <button key={t.id} className="card" onClick={() => st.newFromTemplate(t.id)}>
-          <strong>{t.name}</strong>
-          <span>{t.hint}</span>
-        </button>
-      ))}
-      <p className="hint">Templates start a new design. Your own .ai templates can be added as presets later.</p>
+      <div className="tabs">
+        {(['lighted', 'mirror'] as Finish[]).map((f) => (
+          <button key={f} className={finish === f ? 'tab active' : 'tab'} onClick={() => setFinish(f)}>
+            {finishLabel[f]}
+          </button>
+        ))}
+      </div>
+      <div className="tabs">
+        {(['leftright', 'updown', 'vertical'] as Layout[]).map((l) => (
+          <button key={l} className={layout === l ? 'tab active' : 'tab'} onClick={() => setLayout(l)}>
+            {layoutLabel[l]}
+          </button>
+        ))}
+      </div>
+      <div className="size-grid">
+        {sizes.map((t) => (
+          <button key={`${t.w}x${t.h}`} className="card size-card" onClick={() => st.newFromTemplate(t)}>
+            <strong>
+              {t.w / 10}×{t.h / 10}
+            </strong>
+            <span>cm</span>
+          </button>
+        ))}
+      </div>
+      <button className="card" onClick={() => st.newBlank()}>
+        <strong>Blank board</strong>
+        <span>30×15 cm, empty</span>
+      </button>
+      <p className="hint">
+        Real Mawguud specs: bolt size, bolt spacing, and divider thickness are measured from the production .ai templates.
+      </p>
     </div>
   )
 }
@@ -138,6 +165,10 @@ function Fonts() {
         </div>
       ))}
       <p className="hint">Arabic fonts must be real OpenType fonts — the preview above shows exactly how letters will join and cut.</p>
+      <p className="hint">
+        Mawguud's production font is <strong>Avenir Arabic Medium</strong> (found inside the real templates). Upload its .otf/.ttf here
+        and pick it per text element to match the real signs exactly.
+      </p>
     </div>
   )
 }

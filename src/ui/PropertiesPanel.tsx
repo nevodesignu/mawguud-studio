@@ -56,6 +56,18 @@ export function PropertiesPanel() {
           <Num label="Bridge width" value={design.fin.bridgeWidth} step={0.1} min={0.4} max={4} suffix="mm" onChange={(v) => st.setFin({ bridgeWidth: v })} />
           <Num label="Bridge clearance" value={design.fin.clearance} step={0.1} min={0} max={6} suffix="mm" onChange={(v) => st.setFin({ clearance: v })} />
           <Num label="Min hole area" value={design.fin.minHoleArea} step={0.5} min={0.5} max={30} suffix="mm²" onChange={(v) => st.setFin({ minHoleArea: v })} />
+          <label className="field">
+            <span>Cut style</span>
+            <span className="field-input">
+              <select
+                value={design.fin.exportStyle}
+                onChange={(e) => st.setFin({ exportStyle: e.target.value as 'mawguud' | 'redline' })}
+              >
+                <option value="mawguud">Mawguud dark 1pt</option>
+                <option value="redline">Red hairline</option>
+              </select>
+            </span>
+          </label>
           <div className="row">
             <button onClick={() => st.clearBridgeOverrides()}>Reset bridges to auto</button>
           </div>
@@ -163,16 +175,31 @@ export function PropertiesPanel() {
           <Num label="Width" value={design.sign.w / 10} step={0.5} min={5} suffix="cm" onChange={(v) => st.setSign({ w: v * 10 })} />
           <Num label="Height" value={design.sign.h / 10} step={0.5} min={5} suffix="cm" onChange={(v) => st.setSign({ h: v * 10 })} />
           <Num label="Corner radius" value={design.sign.radius} step={1} min={0} suffix="mm" onChange={(v) => st.setSign({ radius: v })} />
-          <label className="field">
-            <span>Mounting holes</span>
-            <span className="field-input">
-              <input type="checkbox" checked={design.sign.mountHoles} onChange={(e) => st.setSign({ mountHoles: e.target.checked })} />
-            </span>
-          </label>
-          {design.sign.mountHoles && (
+          <h3>Bolts</h3>
+          <div className="stack">
+            <button className={design.sign.bolts ? '' : 'primary'} onClick={() => st.setSign({ bolts: !design.sign.bolts })}>
+              {design.sign.bolts ? '✕ Remove bolts' : '+ Add bolts'}
+            </button>
+          </div>
+          {design.sign.bolts && (
             <>
-              <Num label="Hole ⌀" value={design.sign.holeDia} step={0.5} min={2} suffix="mm" onChange={(v) => st.setSign({ holeDia: v })} />
-              <Num label="Hole inset" value={design.sign.holeInset} step={1} min={4} suffix="mm" onChange={(v) => st.setSign({ holeInset: v })} />
+              <Num label="Bolt ⌀" value={design.sign.boltDia} step={0.1} min={2} suffix="mm" onChange={(v) => st.setSign({ boltDia: v })} />
+              <label className="field">
+                <span>Pattern</span>
+                <span className="field-input">
+                  <select
+                    value={design.sign.boltPattern}
+                    onChange={(e) => st.setSign({ boltPattern: e.target.value as 'corners' | 'sides' })}
+                  >
+                    <option value="corners">4 corners</option>
+                    <option value="sides">2 sides (small mirror)</option>
+                  </select>
+                </span>
+              </label>
+              <Num label="Inset X" value={design.sign.boltInsetX} step={0.5} min={3} suffix="mm" onChange={(v) => st.setSign({ boltInsetX: v })} />
+              {design.sign.boltPattern === 'corners' && (
+                <Num label="Inset Y" value={design.sign.boltInsetY} step={0.5} min={3} suffix="mm" onChange={(v) => st.setSign({ boltInsetY: v })} />
+              )}
             </>
           )}
           <h3>Add</h3>

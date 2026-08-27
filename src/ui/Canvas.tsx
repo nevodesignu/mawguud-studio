@@ -4,6 +4,7 @@ import { shapedSync } from '../shaping/service'
 import { renderTextEl } from './textRender'
 import { multiToD, barRing, roundedRectRing, circleRing, nearestOnRing } from '../geom/poly'
 import type { TextEl, DividerEl } from '../model'
+import { boltCenters } from '../model'
 
 interface DragState {
   kind: 'move' | 'resize' | 'pan' | 'bridge'
@@ -263,19 +264,7 @@ export function Canvas() {
 
   const { sign } = design
   const outlineD = multiToD([[roundedRectRing(0, 0, sign.w, sign.h, sign.radius)]])
-  const holes: string[] = []
-  if (sign.mountHoles) {
-    const i = sign.holeInset
-    const r = sign.holeDia / 2
-    for (const [x, y] of [
-      [i, i],
-      [sign.w - i, i],
-      [sign.w - i, sign.h - i],
-      [i, sign.h - i],
-    ] as [number, number][]) {
-      holes.push(multiToD([[circleRing(x, y, r)]]))
-    }
-  }
+  const holes = boltCenters(sign).map(([x, y]) => multiToD([[circleRing(x, y, sign.boltDia / 2)]]))
 
   const px = (n: number) => n / zoom // constant screen-size in world units
 

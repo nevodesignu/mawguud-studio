@@ -1,12 +1,20 @@
 // Design document model. All dimensions in millimetres.
+// Template specs below are measured from Mawguud's real production .ai templates
+// (Lighted + Mirror, all layouts/sizes) - bolt sizes, insets, divider thickness.
+
+import type { Pt } from './geom/types'
+
+export type BoltPattern = 'corners' | 'sides'
 
 export interface SignSpec {
   w: number
   h: number
   radius: number
-  mountHoles: boolean
-  holeDia: number
-  holeInset: number
+  bolts: boolean
+  boltDia: number
+  boltInsetX: number
+  boltInsetY: number
+  boltPattern: BoltPattern
 }
 
 export interface TextEl {
@@ -33,10 +41,13 @@ export interface DividerEl {
 
 export type El = TextEl | DividerEl
 
+export type ExportStyle = 'mawguud' | 'redline'
+
 export interface FinalizeSettings {
   bridgeWidth: number
   clearance: number
   minHoleArea: number
+  exportStyle: ExportStyle
 }
 
 export interface Design {
@@ -51,7 +62,39 @@ export interface Design {
 
 export const uid = () => Math.random().toString(36).slice(2, 10)
 
-export const defaultFin: FinalizeSettings = { bridgeWidth: 1.2, clearance: 1.5, minHoleArea: 3 }
+export const defaultFin: FinalizeSettings = { bridgeWidth: 1.2, clearance: 1.5, minHoleArea: 3, exportStyle: 'mawguud' }
+
+/** Bolt hole centres for a sign, in design mm. */
+export function boltCenters(sign: SignSpec): Pt[] {
+  if (!sign.bolts) return []
+  const { w, h, boltInsetX: ix, boltInsetY: iy } = sign
+  if (sign.boltPattern === 'sides') {
+    return [
+      [ix, h / 2],
+      [w - ix, h / 2],
+    ]
+  }
+  return [
+    [ix, iy],
+    [w - ix, iy],
+    [w - ix, h - iy],
+    [ix, h - iy],
+  ]
+}
+
+/** Migrate designs saved by older versions of the app. */
+export function normalizeDesign(d: Design): Design {
+  const sign = d.sign as SignSpec & { mountHoles?: boolean; holeDia?: number; holeInset?: number }
+  if (sign.bolts === undefined) {
+    sign.bolts = sign.mountHoles ?? true
+    sign.boltDia = sign.holeDia ?? 6.6
+    sign.boltInsetX = sign.holeInset ?? 23.6
+    sign.boltInsetY = sign.holeInset ?? 23.6
+    sign.boltPattern = 'corners'
+  }
+  if (!d.fin.exportStyle) d.fin.exportStyle = 'mawguud'
+  return d
+}
 
 export function makeDesign(name: string, sign: SignSpec, elements: El[]): Design {
   return {
@@ -65,95 +108,151 @@ export function makeDesign(name: string, sign: SignSpec, elements: El[]): Design
   }
 }
 
-const sign = (w: number, h: number, radius = 10): SignSpec => ({
-  w,
-  h,
-  radius,
-  mountHoles: true,
-  holeDia: 4,
-  holeInset: 10,
-})
-
 const text = (t: string, fontId: string, heightMm: number, x: number, y: number): TextEl => ({
   id: uid(),
   kind: 'text',
   text: t,
   fontId,
-  heightMm,
-  x,
-  y,
+  heightMm: Math.round(heightMm * 10) / 10,
+  x: Math.round(x * 10) / 10,
+  y: Math.round(y * 10) / 10,
   spacingEm: 0,
 })
 
 const divider = (x: number, y: number, length: number, thickness: number, vertical: boolean): DividerEl => ({
   id: uid(),
   kind: 'divider',
-  x,
-  y,
-  length,
+  x: Math.round(x * 10) / 10,
+  y: Math.round(y * 10) / 10,
+  length: Math.round(length * 10) / 10,
   thickness,
   vertical,
   roundCaps: false,
 })
 
-export interface Template {
-  id: string
-  name: string
-  hint: string
-  make(): Design
+// ---------------- real Mawguud template catalog ----------------
+
+export type Finish = 'lighted' | 'mirror'
+export type Layout = 'leftright' | 'updown' | 'vertical'
+
+export interface TemplateSpec {
+  finish: Finish
+  layout: Layout
+  w: number // mm
+  h: number
+  boltDia: number
+  boltInsetX: number
+  boltInsetY: number
+  boltPattern: BoltPattern
+  divThick: number
 }
 
-export const templates: Template[] = [
-  {
-    id: 'left-right',
-    name: 'Left | Right',
-    hint: '40×25 cm · number left, name right',
-    make: () =>
-      makeDesign('Left Right sign', sign(400, 250), [
-        text('Villa', 'poppins-bold', 16, 110, 90),
-        text('50', 'poppins-bold', 58, 110, 150),
-        divider(200, 125, 150, 1.2, true),
-        text('مهندس', 'amiri-bold', 20, 290, 88),
-        text('أحمد درويش', 'amiri-bold', 34, 290, 150),
-      ]),
-  },
-  {
-    id: 'up-down',
-    name: 'Up | Down',
-    hint: '40×25 cm · like the Mawguud lighted sign',
-    make: () =>
-      makeDesign('Up Down sign', sign(400, 250), [
-        text('34', 'poppins-bold', 48, 200, 78),
-        divider(200, 125, 300, 1.2, false),
-        text('المهندس عبيد محمد', 'amiri-bold', 30, 200, 178),
-      ]),
-  },
-  {
-    id: 'vertical',
-    name: 'Vertical',
-    hint: '15×40 cm · door sign',
-    make: () =>
-      makeDesign('Vertical sign', sign(150, 400), [
-        text('12', 'poppins-bold', 42, 75, 80),
-        divider(75, 140, 90, 1.2, false),
-        text('السيد', 'amiri-bold', 30, 75, 210),
-      ]),
-  },
-  {
-    id: 'square',
-    name: 'Square',
-    hint: '25×25 cm',
-    make: () =>
-      makeDesign('Square sign', sign(250, 250), [
-        text('فيلا', 'amiri-bold', 26, 125, 66),
-        text('25', 'poppins-bold', 62, 125, 132),
-        text('عائلة الدرويش', 'amiri-bold', 20, 125, 200),
-      ]),
-  },
-  {
-    id: 'blank',
-    name: 'Blank 30×15',
-    hint: 'empty board',
-    make: () => makeDesign('New sign', sign(300, 150, 8), [text('موجود', 'amiri-bold', 55, 150, 70)]),
-  },
+const L = (layout: Layout, w: number, h: number, divThick = 2.85): TemplateSpec => ({
+  finish: 'lighted',
+  layout,
+  w,
+  h,
+  boltDia: 13.4,
+  boltInsetX: 32.8,
+  boltInsetY: 32.8,
+  boltPattern: 'corners',
+  divThick,
+})
+
+const M = (layout: Layout, w: number, h: number, boltDia: number, inset: number, divThick: number, pattern: BoltPattern = 'corners'): TemplateSpec => ({
+  finish: 'mirror',
+  layout,
+  w,
+  h,
+  boltDia,
+  boltInsetX: inset,
+  boltInsetY: pattern === 'sides' ? h / 2 : inset,
+  boltPattern: pattern,
+  divThick,
+})
+
+export const templateCatalog: TemplateSpec[] = [
+  // Lighted - bolts constant across sizes (measured: dia 13.35, inset 32.8)
+  L('leftright', 400, 250),
+  L('leftright', 500, 300),
+  L('leftright', 600, 350),
+  L('leftright', 700, 400),
+  L('updown', 400, 250),
+  L('updown', 500, 300, 3.35),
+  L('updown', 600, 350, 3.35),
+  L('updown', 700, 400, 3.35),
+  L('vertical', 250, 400),
+  L('vertical', 300, 500),
+  L('vertical', 350, 600),
+  L('vertical', 400, 700),
+  // Mirror - bolts scale with size (measured per size); 30cm boards use 2 side bolts
+  M('leftright', 300, 150, 6.5, 15.3, 2.6, 'sides'),
+  M('leftright', 400, 200, 6.6, 23.6, 2.85),
+  M('leftright', 500, 250, 6.9, 29.4, 2.95),
+  M('leftright', 600, 300, 7.4, 35.3, 3.05),
+  M('leftright', 700, 350, 7.9, 41.1, 3.25),
+  M('updown', 300, 150, 6.4, 18.3, 2.75, 'sides'),
+  M('updown', 400, 200, 6.6, 23.6, 2.85),
+  M('updown', 500, 250, 6.9, 29.4, 3.05),
+  M('updown', 600, 300, 7.4, 35.3, 3.15),
+  M('updown', 700, 350, 7.9, 41.1, 3.25),
+  M('vertical', 150, 300, 6.4, 14.3, 2.65, 'sides'),
+  M('vertical', 200, 400, 6.6, 23.6, 2.85),
+  M('vertical', 250, 500, 6.9, 29.4, 3.05),
+  M('vertical', 300, 600, 7.4, 35.3, 3.05),
+  M('vertical', 350, 700, 7.9, 41.1, 3.25),
 ]
+
+export const finishLabel: Record<Finish, string> = { lighted: 'Lighted', mirror: 'Mirror' }
+export const layoutLabel: Record<Layout, string> = { leftright: 'Left | Right', updown: 'Up | Down', vertical: 'Vertical' }
+
+// Default Arabic font for seeded text. Their production font is Avenir Arabic
+// Medium (commercial) - once uploaded in the Fonts tab, pick it per element.
+const AR = 'tajawal-bold'
+const NUM = 'poppins-bold'
+
+export function makeFromSpec(spec: TemplateSpec): Design {
+  const { w, h } = spec
+  const sign: SignSpec = {
+    w,
+    h,
+    radius: 0, // Mawguud boards are sharp-cornered
+    bolts: true,
+    boltDia: spec.boltDia,
+    boltInsetX: spec.boltInsetX,
+    boltInsetY: spec.boltInsetY,
+    boltPattern: spec.boltPattern,
+  }
+  const els: El[] = []
+  if (spec.layout === 'leftright') {
+    els.push(divider(w / 2, h / 2, h * 0.64, spec.divThick, true))
+    els.push(text('أ / محروس', AR, h * 0.1, w * 0.75, h * 0.4))
+    els.push(text('عبد الحميد', AR, h * 0.1, w * 0.75, h * 0.57))
+    els.push(text('منيل', AR, h * 0.1, w * 0.25, h * 0.4))
+    els.push(text('جويدة', AR, h * 0.1, w * 0.25, h * 0.57))
+  } else if (spec.layout === 'updown') {
+    els.push(text('34', NUM, h * 0.18, w / 2, h * 0.3))
+    els.push(divider(w / 2, h / 2, w * 0.66, spec.divThick, false))
+    els.push(text('المهندس عبيد محمد', AR, h * 0.12, w / 2, h * 0.71))
+  } else {
+    els.push(text('12', NUM, h * 0.08, w / 2, h * 0.14))
+    els.push(divider(w / 2, h * 0.24, w * 0.64, spec.divThick, false))
+    els.push(text('عائلة', AR, h * 0.055, w / 2, h * 0.42))
+    els.push(text('الدرويش', AR, h * 0.055, w / 2, h * 0.52))
+  }
+  const name = `${finishLabel[spec.finish]} ${layoutLabel[spec.layout]} ${w / 10}x${h / 10}`
+  return makeDesign(name, sign, els)
+}
+
+export function makeBlank(): Design {
+  return makeDesign('New sign', {
+    w: 300,
+    h: 150,
+    radius: 0,
+    bolts: true,
+    boltDia: 6.5,
+    boltInsetX: 15.3,
+    boltInsetY: 75,
+    boltPattern: 'sides',
+  }, [text('موجود', AR, 55, 150, 70)])
+}

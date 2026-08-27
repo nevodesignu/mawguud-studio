@@ -1,10 +1,25 @@
 // PDF-compatible .ai writer. 1:1 scale: the page is exactly the sign size in mm.
-// Cut lines are hairline red strokes; solid shapes are black fill + hairline red
-// stroke so any laser-software import convention finds usable vectors.
+// Default style matches Mawguud's own production templates (measured from their
+// .ai files): everything in near-black #231F20, 1pt strokes, letter shapes
+// filled. A red-hairline style is available for laser softwares that expect it.
 // Input geometry is design space (mm, y-down); this writer flips to PDF y-up.
 import type { MultiPoly } from '../geom/types'
 
 const MM = 72 / 25.4
+
+export interface AiStyle {
+  cutColor: [number, number, number] // 0-255
+  cutWidthMm: number
+  shapeFill: [number, number, number]
+  shapeStrokeWidthMm: number
+}
+
+// #231F20 at 1pt - exactly what Mawguud's production templates use
+export const MAWGUUD_STYLE: AiStyle = { cutColor: [35, 31, 32], cutWidthMm: 0.353, shapeFill: [35, 31, 32], shapeStrokeWidthMm: 0.353 }
+// hairline red cut-line convention used by many laser workflows
+export const REDLINE_STYLE: AiStyle = { cutColor: [255, 0, 0], cutWidthMm: 0.02, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.02 }
+
+const frac = (c: number) => (c / 255).toFixed(4)
 
 function pathOps(mp: MultiPoly, hMm: number): string {
   const ops: string[] = []
@@ -24,18 +39,21 @@ function pathOps(mp: MultiPoly, hMm: number): string {
 export interface AiDocInput {
   wMm: number
   hMm: number
-  cutLines: MultiPoly // stroked hairline red only (panel outline, mounting holes)
-  shapes: MultiPoly // filled black + hairline red (letters, dividers) - even-odd fill
+  cutLines: MultiPoly // stroked only (panel outline, bolt holes)
+  shapes: MultiPoly // filled + stroked (letters, dividers) - even-odd fill
+  style?: AiStyle
 }
 
-export function buildAiPdf({ wMm, hMm, cutLines, shapes }: AiDocInput): Uint8Array {
+export function buildAiPdf({ wMm, hMm, cutLines, shapes, style = MAWGUUD_STYLE }: AiDocInput): Uint8Array {
+  const [cr, cg, cb] = style.cutColor
+  const [fr, fg, fb] = style.shapeFill
   const content = [
     'q',
     `${MM.toFixed(8)} 0 0 ${MM.toFixed(8)} 0 0 cm`,
-    '1 0 0 RG 0.01 w',
+    `${frac(cr)} ${frac(cg)} ${frac(cb)} RG ${style.cutWidthMm.toFixed(3)} w`,
     pathOps(cutLines, hMm),
     'S',
-    '0 0 0 rg 1 0 0 RG 0.01 w',
+    `${frac(fr)} ${frac(fg)} ${frac(fb)} rg ${frac(cr)} ${frac(cg)} ${frac(cb)} RG ${style.shapeStrokeWidthMm.toFixed(3)} w`,
     pathOps(shapes, hMm),
     'B*',
     'Q',

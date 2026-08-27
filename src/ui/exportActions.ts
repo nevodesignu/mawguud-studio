@@ -1,9 +1,10 @@
 // Assemble production/preview documents from a design and trigger downloads.
 import type { Design } from '../model'
+import { boltCenters } from '../model'
 import type { FinalizeResult } from '../store/studio'
 import type { MultiPoly } from '../geom/types'
 import { roundedRectRing, circleRing, multiToD, barRing } from '../geom/poly'
-import { buildAiPdf, type AiDocInput } from '../export/pdf'
+import { buildAiPdf, MAWGUUD_STYLE, REDLINE_STYLE, type AiDocInput } from '../export/pdf'
 import { buildProductionSvg, saveBlob } from '../export/svg'
 import { shapedAsync } from '../shaping/service'
 import { renderTextEl } from './textRender'
@@ -11,17 +12,8 @@ import { renderTextEl } from './textRender'
 export function cutLinesOf(design: Design): MultiPoly {
   const { sign } = design
   const cut: MultiPoly = [[roundedRectRing(0, 0, sign.w, sign.h, sign.radius)]]
-  if (sign.mountHoles) {
-    const i = sign.holeInset
-    const r = sign.holeDia / 2
-    for (const [x, y] of [
-      [i, i],
-      [sign.w - i, i],
-      [sign.w - i, sign.h - i],
-      [i, sign.h - i],
-    ] as [number, number][]) {
-      cut.push([circleRing(x, y, r)])
-    }
+  for (const [x, y] of boltCenters(sign)) {
+    cut.push([circleRing(x, y, sign.boltDia / 2)])
   }
   return cut
 }
@@ -34,6 +26,7 @@ export function productionDoc(design: Design, fin: FinalizeResult): AiDocInput {
     hMm: design.sign.h,
     cutLines: cutLinesOf(design),
     shapes: fin.geometry,
+    style: design.fin.exportStyle === 'redline' ? REDLINE_STYLE : MAWGUUD_STYLE,
   }
 }
 

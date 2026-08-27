@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import type { Design, El, TextEl, SignSpec, FinalizeSettings } from '../model'
-import { templates, uid } from '../model'
+import type { Design, El, TextEl, SignSpec, FinalizeSettings, TemplateSpec } from '../model'
+import { templateCatalog, makeFromSpec, makeBlank, normalizeDesign, uid } from '../model'
 import type { MultiPoly, Pt } from '../geom/types'
 import { bboxOfMulti } from '../geom/types'
 import type { Bridge } from '../geom/bridges'
@@ -65,7 +65,8 @@ interface StudioState {
   flushSave(): Promise<void>
   refreshDesigns(): Promise<void>
   openDesign(id: string): Promise<void>
-  newFromTemplate(tplId: string): void
+  newFromTemplate(spec: TemplateSpec): void
+  newBlank(): void
   deleteDesign(id: string): Promise<void>
   duplicateDesign(): void
   setName(name: string): void
@@ -125,8 +126,15 @@ function bridgeSettingsOf(design: Design) {
   }
 }
 
+function startFresh(set: (p: Partial<StudioState>) => void, d: Design) {
+  past = []
+  future = []
+  gestureSnapshot = null
+  set({ design: d, selectedId: null, mode: 'design', fin: null, finError: null })
+}
+
 export const useStudio = create<StudioState>((set, get) => ({
-  design: templates[0].make(),
+  design: makeFromSpec(templateCatalog[0]),
   designs: [],
   fonts: [],
   selectedId: null,
@@ -325,20 +333,17 @@ export const useStudio = create<StudioState>((set, get) => ({
     await get().flushSave()
     const d = await loadDesignById(id)
     if (!d) return
-    past = []
-    future = []
-    gestureSnapshot = null
-    set({ design: d, selectedId: null, mode: 'design', fin: null, finError: null, saved: true })
+    startFresh(set, normalizeDesign(d))
+    set({ saved: true })
   },
-  newFromTemplate: (tplId) => {
-    const tpl = templates.find((t) => t.id === tplId)
-    if (!tpl) return
+  newFromTemplate: (spec) => {
     void get().flushSave()
-    past = []
-    future = []
-    gestureSnapshot = null
-    const d = tpl.make()
-    set({ design: d, selectedId: null, mode: 'design', fin: null, finError: null })
+    startFresh(set, makeFromSpec(spec))
+    scheduleSave(get, set)
+  },
+  newBlank: () => {
+    void get().flushSave()
+    startFresh(set, makeBlank())
     scheduleSave(get, set)
   },
   deleteDesign: async (id) => {
@@ -350,11 +355,8 @@ export const useStudio = create<StudioState>((set, get) => ({
         saveTimer = null
       }
       await deleteDesignById(id)
-      past = []
-      future = []
-      gestureSnapshot = null
-      const blank = templates[templates.length - 1].make()
-      set({ design: blank, selectedId: null, mode: 'design', fin: null, finError: null, saved: true })
+      startFresh(set, makeBlank())
+      set({ saved: true })
     } else {
       await deleteDesignById(id)
     }
