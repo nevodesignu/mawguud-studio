@@ -12,12 +12,15 @@ export interface AiStyle {
   cutWidthMm: number
   shapeFill: [number, number, number]
   shapeStrokeWidthMm: number
+  fillShapes: boolean // false = pure outlined cut paths (opens outlined in Illustrator)
 }
 
-// pure black at 1pt (the templates measured #231F20, but the boss says #000000)
-export const MAWGUUD_STYLE: AiStyle = { cutColor: [0, 0, 0], cutWidthMm: 0.353, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.353 }
+// default: outlined cut paths, pure black 1pt - opens in Illustrator as outlines
+export const MAWGUUD_STYLE: AiStyle = { cutColor: [0, 0, 0], cutWidthMm: 0.353, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.353, fillShapes: false }
+// filled preview-style file
+export const FILLED_STYLE: AiStyle = { cutColor: [0, 0, 0], cutWidthMm: 0.353, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.353, fillShapes: true }
 // hairline red cut-line convention used by many laser workflows
-export const REDLINE_STYLE: AiStyle = { cutColor: [255, 0, 0], cutWidthMm: 0.02, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.02 }
+export const REDLINE_STYLE: AiStyle = { cutColor: [255, 0, 0], cutWidthMm: 0.02, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.02, fillShapes: false }
 
 const frac = (c: number) => (c / 255).toFixed(4)
 
@@ -55,7 +58,9 @@ export function buildAiPdf({ wMm, hMm, cutLines, shapes, style = MAWGUUD_STYLE }
     'S',
     `${frac(fr)} ${frac(fg)} ${frac(fb)} rg ${frac(cr)} ${frac(cg)} ${frac(cb)} RG ${style.shapeStrokeWidthMm.toFixed(3)} w`,
     pathOps(shapes, hMm),
-    'B*',
+    // nonzero fill (B) is robust even if coincident duplicate rings sneak in;
+    // stroke-only (S) gives pure outlined cut paths
+    style.fillShapes ? 'B' : 'S',
     'Q',
   ].join('\n')
 

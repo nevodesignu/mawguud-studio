@@ -5,10 +5,11 @@ const hex = (c: [number, number, number]) => '#' + c.map((v) => v.toString(16).p
 
 /** Production SVG twin of the .ai file - mm units, 1:1. */
 export function buildProductionSvg({ wMm, hMm, cutLines, shapes, style = MAWGUUD_STYLE }: AiDocInput): string {
+  const fill = style.fillShapes ? `${hex(style.shapeFill)}" fill-rule="nonzero` : 'none'
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${wMm}mm" height="${hMm}mm" viewBox="0 0 ${wMm} ${hMm}">` +
     `<path d="${multiToD(cutLines)}" fill="none" stroke="${hex(style.cutColor)}" stroke-width="${style.cutWidthMm}"/>` +
-    `<path d="${multiToD(shapes)}" fill="${hex(style.shapeFill)}" fill-rule="evenodd" stroke="${hex(style.cutColor)}" stroke-width="${style.shapeStrokeWidthMm}"/>` +
+    `<path d="${multiToD(shapes)}" fill="${fill}" stroke="${hex(style.cutColor)}" stroke-width="${style.shapeStrokeWidthMm}"/>` +
     `</svg>`
   )
 }

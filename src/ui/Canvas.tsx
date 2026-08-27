@@ -432,7 +432,7 @@ export function Canvas() {
               {outlineView ? (
                 <path d={multiToD(fin.geometry)} fill="none" stroke="var(--ink)" strokeWidth={px(1.6)} pointerEvents="none" />
               ) : (
-                <path d={multiToD(fin.geometry)} fill="var(--ink)" fillRule="evenodd" pointerEvents="none" />
+                <path d={multiToD(fin.geometry)} fill="var(--ink)" fillRule="nonzero" pointerEvents="none" />
               )}
               {fin.bridges.map((b) => (
                 <polygon

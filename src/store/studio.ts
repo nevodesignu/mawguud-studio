@@ -429,6 +429,18 @@ export const useStudio = create<StudioState>((set, get) => ({
     set({ finalizing: true })
     const { design } = get()
     const warnings: string[] = []
+    // catch stealth duplicates (an accidental Ctrl+V lands 8mm away and hides
+    // under the original) before they end up doubled in the cut file
+    const textEls = design.elements.filter((e): e is TextEl => e.kind === 'text')
+    for (let i = 0; i < textEls.length; i++) {
+      for (let j = i + 1; j < textEls.length; j++) {
+        const a = textEls[i]
+        const b = textEls[j]
+        if (a.text.trim() && a.text === b.text && a.fontId === b.fontId && Math.hypot(a.x - b.x, a.y - b.y) < Math.max(12, a.heightMm)) {
+          warnings.push(`"${a.text.slice(0, 16)}" exists twice almost in the same spot - looks like an accidental duplicate. Delete one before cutting.`)
+        }
+      }
+    }
     try {
       const raws: MultiPoly[] = []
       for (const el of design.elements) {

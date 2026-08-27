@@ -4,7 +4,7 @@ import { boltCenters } from '../model'
 import type { FinalizeResult } from '../store/studio'
 import type { MultiPoly } from '../geom/types'
 import { roundedRectRing, circleRing, multiToD, barRing } from '../geom/poly'
-import { buildAiPdf, MAWGUUD_STYLE, REDLINE_STYLE, type AiDocInput } from '../export/pdf'
+import { buildAiPdf, MAWGUUD_STYLE, FILLED_STYLE, REDLINE_STYLE, type AiDocInput } from '../export/pdf'
 import { buildProductionSvg, saveBlob } from '../export/svg'
 import { shapedAsync } from '../shaping/service'
 import { renderTextEl } from './textRender'
@@ -26,7 +26,7 @@ export function productionDoc(design: Design, fin: FinalizeResult): AiDocInput {
     hMm: design.sign.h,
     cutLines: cutLinesOf(design),
     shapes: fin.geometry,
-    style: design.fin.exportStyle === 'redline' ? REDLINE_STYLE : MAWGUUD_STYLE,
+    style: design.fin.exportStyle === 'redline' ? REDLINE_STYLE : design.fin.exportStyle === 'filled' ? FILLED_STYLE : MAWGUUD_STYLE,
   }
 }
 

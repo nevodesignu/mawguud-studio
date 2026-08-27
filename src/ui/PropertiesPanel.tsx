@@ -64,9 +64,10 @@ export function PropertiesPanel() {
             <span className="field-input">
               <select
                 value={design.fin.exportStyle}
-                onChange={(e) => st.setFin({ exportStyle: e.target.value as 'mawguud' | 'redline' })}
+                onChange={(e) => st.setFin({ exportStyle: e.target.value as 'mawguud' | 'filled' | 'redline' })}
               >
-                <option value="mawguud">Mawguud dark 1pt</option>
+                <option value="mawguud">Outlined (opens as outlines)</option>
+                <option value="filled">Filled black</option>
                 <option value="redline">Red hairline</option>
               </select>
             </span>

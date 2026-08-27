@@ -41,7 +41,7 @@ export interface DividerEl {
 
 export type El = TextEl | DividerEl
 
-export type ExportStyle = 'mawguud' | 'redline'
+export type ExportStyle = 'mawguud' | 'filled' | 'redline'
 
 export interface FinalizeSettings {
   bridgeWidth: number
