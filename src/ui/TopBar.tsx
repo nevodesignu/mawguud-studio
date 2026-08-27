@@ -11,6 +11,7 @@ export function TopBar() {
   return (
     <header className="topbar">
       <div className="brand">
+        <span className="brand-mark">م</span>
         MAWGUUD <span>STUDIO</span>
       </div>
       <input className="design-name" value={design.name} onChange={(e) => st.setName(e.target.value)} spellCheck={false} />
@@ -28,10 +29,10 @@ export function TopBar() {
         </button>
       </div>
       <div className="topbar-right">
-        <button title="Undo (Ctrl+Z)" onClick={() => st.undo()}>
+        <button className="icon" title="Undo (Ctrl+Z)" onClick={() => st.undo()}>
           ↩
         </button>
-        <button title="Redo (Ctrl+Shift+Z)" onClick={() => st.redo()}>
+        <button className="icon" title="Redo (Ctrl+Shift+Z)" onClick={() => st.redo()}>
           ↪
         </button>
         <button onClick={() => void downloadClientPng(design)}>Client preview</button>
