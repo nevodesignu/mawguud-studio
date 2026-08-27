@@ -8,14 +8,15 @@
 //                 blocks centered beside the divider, divider content-matched,
 //                 whole composition centered on the board.
 //   'canonical' - Sign Bot. Also sizes the text, using roles trained on the
-//                 real production files (label ~0.85 above a 2.0 number, names
-//                 1.0, numbers capped at 30% of board height, ~78% width fill).
+//                 real production files, then tamed per LAW 18 (label ~0.85
+//                 above a 1.45 number, names 1.0, numbers capped at 24% of
+//                 board height, ~78% width fill).
 //
 // Shared pattern knowledge (both modes): Left|Right columns, label-over-number,
 // one-row letter|number ("B | 223"), Up|Down stacks, and the catalog Villa row
 // (label left / number right on one line over a full-width divider).
 import type { Design, TextEl, DividerEl } from '../model'
-import { isNumberLine, uid } from '../model'
+import { boltCenters, isNumberLine, uid } from '../model'
 import { shapedAsync } from '../shaping/service'
 
 export type ElPatch = Partial<Omit<TextEl, 'kind'>> & Partial<Omit<DividerEl, 'kind'>>
@@ -31,7 +32,11 @@ interface Measured {
 const LABEL_RE =
   /^(شقة|شقه|فيلا|عمارة|عماره|دور|مكتب|محل|عيادة|عياده|رقم|بدروم|villa|apt\.?|apartment|flat|office|floor|shop|unit|no\.?|bezmnt|basement)$/i
 
-const RATIO: Record<'name' | 'number' | 'label', number> = { name: 1.0, number: 2.0, label: 0.85 }
+// LAW 18: the number leads the sign but never dwarfs it. The raw production
+// files ran numbers at 2.0x a name / 30% of board height - the owner called
+// that "super huge". 1.45x + the 24% NUMBER_CAP keeps the number the first
+// thing you find without turning the sign into a parking plate.
+const RATIO: Record<'name' | 'number' | 'label', number> = { name: 1.0, number: 1.45, label: 0.85 }
 const STACK_GAP = 0.18 // ink gap between lines, fraction of mean line height
 // LAW 11: text as big as possible on every sign - but readable, never bloated.
 // The fills push size up; NUMBER_CAP / LINE_CAP are the "not too big" guards.
@@ -40,9 +45,29 @@ const HEIGHT_FILL = 0.78 // canonical ensemble height cap
 const DIV_GAP_X = 0.045 // gap between divider and each block, fraction of W
 const DIV_GAP_Y = 0.05 // for horizontal dividers, fraction of H
 const LINE_CAP = 0.4
-const NUMBER_CAP = 0.3
+const NUMBER_CAP = 0.24
 
 export type ArrangeMode = 'layout' | 'canonical'
+
+/**
+ * LAW 19: the divider never touches a bolt circle. Every engine-emitted
+ * divider length is clamped so each bolt hole keeps a clear margin of air
+ * (one bolt radius, at least 3mm) - matters most on side-bolt boards where
+ * LAW 10 runs the divider exactly on the bolt axis.
+ */
+function clampDividerToBolts(design: Design, cx: number, cy: number, vertical: boolean, thickness: number, length: number): number {
+  const sign = design.sign
+  const r = sign.boltDia / 2
+  const margin = Math.max(3, r)
+  let half = length / 2
+  for (const [bx, by] of boltCenters(sign)) {
+    const da = vertical ? Math.abs(by - cy) : Math.abs(bx - cx) // along the bar
+    const dp = vertical ? Math.abs(bx - cx) : Math.abs(by - cy) // across the bar
+    if (dp >= thickness / 2 + r + margin) continue // bolt clears the bar's band
+    half = Math.min(half, da - r - margin)
+  }
+  return Math.max(10, 2 * half)
+}
 
 export interface ArrangeOpts {
   mode?: ArrangeMode
@@ -299,7 +324,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     // letter|number mode (canonical sizing only): equal size on one row
     const shortSingle = (g: Measured[]) => g.length === 1 && g[0].el.text.trim().length <= 4
     const oneRow = mode === 'canonical' && shortSingle(right) && shortSingle(left)
-    const cols: Measured[][] = oneRow ? [right, left].map((g) => g.map((m) => ({ ...m, unit: 2.0 }))) : [right, left]
+    const cols: Measured[][] = oneRow ? [right, left].map((g) => g.map((m) => ({ ...m, unit: 1.45 }))) : [right, left]
     const [R, L] = cols
 
     const gapX = DIV_GAP_X * w
@@ -325,7 +350,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
 
     // the divider always tracks the content beside it (both modes)
     const divLen = clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
-    patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(divLen) }
+    patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(clampDividerToBolts(design, divX, h / 2, true, div.thickness, divLen)) }
     placeStack(R, H, cxR, h / 2, patches, stacks)
     placeStack(L, H, cxL, h / 2, patches, stacks)
     if (oneRow && R.length && L.length) rows.push([R[0].el.id, L[0].el.id])
@@ -345,7 +370,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       top.every((m) => m.role === 'number' || m.role === 'label' || m.el.text.trim().length <= 8)
 
     if (topRowPair) {
-      const rowUnit = 1.7
+      const rowUnit = 1.4
       const row = mode === 'canonical' ? top.map((m) => ({ ...m, unit: rowUnit })) : top
       const num = row.find((m) => m.role === 'number')!
       const other = row.find((m) => m.role !== 'number')!
@@ -362,6 +387,15 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       for (const m of bottom) s = Math.min(s, CW / (m.aspect * ratioOf(m)))
       s = Math.min(s, (NUMBER_CAP * h) / rowUnit)
       for (const m of bottom) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
+      if (boltAxis) {
+        // LAW 19: the divider is pinned to the bolt axis, so each half's
+        // content must FIT its half - text may never reach the line
+        const halfSpace = h / 2 - gapY - padY
+        if (halfSpace > 0) {
+          s = Math.min(s, halfSpace / rowInkUnits)
+          if (bottom.length) s = Math.min(s, halfSpace / stackUnits(bottom))
+        }
+      }
       const canonRow: HeightOf = (m) => f1((row.includes(m) ? rowUnit : ratioOf(m)) * s)
       const H: HeightOf = mode === 'canonical' ? canonRow : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), canonRow(m)))
 
@@ -391,7 +425,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       patches[rightM.el.id] = { x: r1(xR - (rightM.aspect * H(rightM)) / 2), y: r1(cyRow), heightMm: r1(H(rightM)) }
       // the line runs exactly from the first letter to the last letter of the
       // widest adjacent content - never past it
-      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(Math.max(CW, blockWidth(bottom, H))) }
+      const rowDivLen = clampDividerToBolts(design, w / 2, divY, false, div.thickness, Math.max(CW, blockWidth(bottom, H)))
+      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(rowDivLen) }
       placeStack(bottom, H, w / 2, cyB, patches, stacks)
       rows.push([leftM.el.id, rightM.el.id])
     } else {
@@ -401,6 +436,14 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       for (const m of measured) {
         s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
+      }
+      if (boltAxis) {
+        // LAW 19: divider pinned to the bolt axis - each half's stack must fit
+        const halfSpace = h / 2 - gapY - padY
+        if (halfSpace > 0) {
+          if (top.length) s = Math.min(s, halfSpace / stackUnits(top))
+          if (bottom.length) s = Math.min(s, halfSpace / stackUnits(bottom))
+        }
       }
       const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), scaled(s)(m)))
 
@@ -423,7 +466,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
 
       // exact content span: first letter to last letter of the widest block
       const divLen = Math.max(0.2 * w, blockWidth(top, H), blockWidth(bottom, H))
-      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(divLen) }
+      patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(clampDividerToBolts(design, w / 2, divY, false, div.thickness, divLen)) }
       placeStack(top, H, w / 2, cyT, patches, stacks)
       placeStack(bottom, H, w / 2, cyB, patches, stacks)
     }

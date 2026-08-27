@@ -13,7 +13,7 @@ import { initHB } from '../src/shaping/engine'
 import { setFontDataProvider } from '../src/fonts/catalog'
 import { shapedAsync } from '../src/shaping/service'
 import { arrangeDesign, optimizeNameSplits } from '../src/layout/arrange'
-import { makeDesign, botElements, signFromSpec, type TemplateSpec, type Design, type TextEl, type Layout } from '../src/model'
+import { makeDesign, botElements, signFromSpec, boltCenters, type TemplateSpec, type Design, type TextEl, type Layout } from '../src/model'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -120,6 +120,21 @@ function assert(cond: boolean, label: string, detail: string) {
   }
 }
 
+/** LAW 19 invariant: the divider keeps at least `minGap` mm of air from every bolt circle. */
+function assertDividerClear(design: Design, label: string, minGap: number) {
+  const div = design.elements.find((e) => e.kind === 'divider')
+  if (!div || div.kind !== 'divider') return
+  const r = design.sign.boltDia / 2
+  const hx = div.vertical ? div.thickness / 2 : div.length / 2
+  const hy = div.vertical ? div.length / 2 : div.thickness / 2
+  for (const [bx, by] of boltCenters(design.sign)) {
+    const dx = Math.max(0, Math.abs(bx - div.x) - hx)
+    const dy = Math.max(0, Math.abs(by - div.y) - hy)
+    const dist = Math.hypot(dx, dy) - r
+    assert(dist >= minGap, label, `divider is ${dist.toFixed(1)}mm from the bolt at (${bx.toFixed(0)},${by.toFixed(0)}) (needs >= ${minGap})`)
+  }
+}
+
 async function runCase(c: Case, w: number, h: number) {
   const sp = spec(c.layout, w, h)
   const design = makeDesign(`${c.name} ${w}x${h}`, signFromSpec(sp), botElements(sp, c.groups))
@@ -152,6 +167,8 @@ async function runCase(c: Case, w: number, h: number) {
       const overlapY = Math.min(t.bottom, db) - Math.max(t.top, dt)
       assert(!(overlapX > 0.5 && overlapY > 0.5), label, `"${t.el.text}" collides with divider`)
     }
+    // LAW 19: never touching a bolt circle either
+    assertDividerClear(design, label, 1)
   }
   // 2. whole-composition centering
   if (texts.length) {
@@ -181,10 +198,11 @@ async function runCase(c: Case, w: number, h: number) {
 }
 
 /**
- * GOLDEN MASTER - approved by the owner on 2026-08-27 ("this one is perfect"):
- * bot(["م/يحيي","اسلام"] | ["شقة","20"]) on Mirror 40x20 must produce exactly
- * names 30mm, label 25.5mm, number 60mm, divider ~113mm. Any engine change
- * that moves these numbers changes the approved production look - and fails.
+ * GOLDEN MASTER - approved by the owner on 2026-08-27 ("this one is perfect"),
+ * re-baselined the same day for LAW 18 (owner: numbers were "super huge" at
+ * 2.0x/30% - now 1.45x/24%): bot(["م/يحيي","اسلام"] | ["شقة","20"]) on Mirror
+ * 40x20 must produce exactly names 33.1mm, label 28.1mm, number 48mm. Any
+ * engine change that moves these numbers changes the production look - and fails.
  */
 async function goldenMaster() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
@@ -197,14 +215,13 @@ async function goldenMaster() {
   const label = 'GOLDEN شقة/20'
   const byText = (t: string) => design.elements.find((e) => e.kind === 'text' && e.text === t) as TextEl
   const near = (v: number, want: number, tol: number, what: string) => assert(Math.abs(v - want) <= tol, label, `${what}: ${v} (approved: ${want})`)
-  near(byText('م/يحيي').heightMm, 30, 0.5, 'name line height')
-  near(byText('اسلام').heightMm, 30, 0.5, 'name line height')
-  near(byText('شقة').heightMm, 25.5, 0.5, 'label height')
-  near(byText('20').heightMm, 60, 0.5, 'number height')
+  near(byText('م/يحيي').heightMm, 33.1, 0.5, 'name line height')
+  near(byText('اسلام').heightMm, 33.1, 0.5, 'name line height')
+  near(byText('شقة').heightMm, 28.1, 0.5, 'label height')
+  near(byText('20').heightMm, 48, 0.5, 'number height')
   const d = design.elements.find((e) => e.kind === 'divider')
-  // re-baselined 2026-08-27 (x2): ink-extent stacking measures true block
-  // heights (descenders included) so the content-matched divider follows
-  if (d && d.kind === 'divider') near(d.length, 118.4, 2, 'divider length')
+  // content-matched divider follows the (now taller) name column
+  if (d && d.kind === 'divider') near(d.length, 118.6, 2, 'divider length')
 }
 
 /**
@@ -239,13 +256,15 @@ async function sizingSovereignty() {
 /** Nudge preservation: a small deliberate move survives Perfect-it; a large one snaps. */
 async function nudgeKeep() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
-  const design = makeDesign('nudge', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
+  // one-column design: no cross-divider neighbours, so law-14 unification
+  // can never eat the nudge and we test pure nudge-keep mechanics
+  const design = makeDesign('nudge', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], []]))
   const applyMode = async (mode: 'layout' | 'canonical') => {
     const patches = await arrangeDesign(design, { mode })
     for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
   }
   await applyMode('canonical')
-  // nudge the TOP line: far from any other axis, so law-14 unification stays out
+  // nudge the TOP line: far from any other axis
   const line = design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'م/يحيي')!
   const nudgedY = line.y - 5 // "a bit upward"
   line.y = nudgedY
@@ -328,10 +347,16 @@ async function law15SiblingSizes() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 300, h: 150, boltDia: 6.5, boltInsetX: 15.3, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }
   const design = makeDesign('l15', signFromSpec(sp), botElements(sp, [['Ahmed', 'Malek'], ['Villa', '30']]))
   const t = (txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  // all four hand-sized (sized = final): the base floor must not lift any of
+  // them, so the test isolates pure law-15 cluster semantics
   t('Ahmed').heightMm = 28.4
+  t('Ahmed').sized = true
   t('Malek').heightMm = 31 // almost equal - the exact case the owner spotted
+  t('Malek').sized = true
   t('Villa').heightMm = 19.1
+  t('Villa').sized = true
   t('30').heightMm = 45
+  t('30').sized = true
   const patches = await arrangeDesign(design, { mode: 'layout' })
   for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
   assert(Math.abs(t('Ahmed').heightMm - 31) < 0.11 && Math.abs(t('Malek').heightMm - 31) < 0.11, 'LAW 15', `siblings not unified up: ${t('Ahmed').heightMm} / ${t('Malek').heightMm}`)
@@ -357,6 +382,73 @@ async function law16ReadingDirection() {
   await apply(d2)
   const divX2 = d2.elements.find((e) => e.kind === 'divider')!.x
   assert(t(d2, 'Ahmed').x < divX2 && t(d2, '30').x > divX2, 'LAW 16', `Latin name not on the left (name x=${t(d2, 'Ahmed').x}, div=${divX2})`)
+}
+
+/**
+ * LAW 18: the number leads the sign but never dwarfs it (owner 2026-08-27:
+ * "dont make numbers super huge just make it look good"). Bot numbers stay
+ * within 1.45x the tallest name and 24% of the board height - and still
+ * above the name, so the number keeps its find-me-first job.
+ */
+async function law18NumberScale() {
+  const cases: { sp: TemplateSpec; groups: string[][] }[] = [
+    { sp: { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }, groups: [['م/يحيي', 'اسلام'], ['شقة', '20']] },
+    { sp: { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }, groups: [['Villa', '34'], ['المهندس عبيد محمد']] },
+    { sp: { finish: 'mirror', layout: 'updown', w: 400, h: 250, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }, groups: [['34'], ['المهندس عبيد محمد']] },
+    { sp: { finish: 'mirror', layout: 'leftright', w: 300, h: 150, boltDia: 6.5, boltInsetX: 15.3, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }, groups: [['223'], ['B']] },
+  ]
+  for (const c of cases) {
+    const design = makeDesign('l18', signFromSpec(c.sp), botElements(c.sp, c.groups))
+    const patches = await arrangeDesign(design, { mode: 'canonical' })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+    const texts = design.elements.filter((e): e is TextEl => e.kind === 'text' && e.text.trim().length > 0)
+    const nums = texts.filter((e) => /^[0-9٠-٩\s]+$/.test(e.text.trim()))
+    const names = texts.filter((e) => /[؀-ۿa-z]{3,}/i.test(e.text.trim()) && !/^(villa|شقة)$/i.test(e.text.trim()))
+    if (nums.length === 0) continue
+    const num = Math.max(...nums.map((e) => e.heightMm))
+    const label = `LAW 18 @${c.sp.layout} ${c.sp.w}x${c.sp.h}`
+    assert(num <= 0.24 * c.sp.h + 0.11, label, `number ${num}mm breaks the 24% cap on h=${c.sp.h}`)
+    if (names.length > 0) {
+      const nameMax = Math.max(...names.map((e) => e.heightMm))
+      assert(num <= 1.45 * nameMax + 0.25, label, `number ${num}mm dwarfs the ${nameMax}mm name (>1.45x)`)
+      assert(num >= nameMax, label, `number ${num}mm lost the lead to the ${nameMax}mm name`)
+    }
+  }
+}
+
+/**
+ * LAW 19: the divider never touches the bolt circles or the text. A side-bolt
+ * board pins the divider onto the bolt axis (law 10) - exactly where it could
+ * collide, so the engine must clamp its length clear of every hole and keep
+ * each half's content inside its half.
+ */
+async function law19DividerClear() {
+  const cases: { sp: TemplateSpec; groups: string[][] }[] = [
+    // bolts pulled far inboard: the unclamped content-width divider WOULD hit them
+    { sp: { finish: 'mirror', layout: 'updown', w: 300, h: 150, boltDia: 6.5, boltInsetX: 30, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }, groups: [['Villa', '34'], ['عائلة الدرويش الكريمة جدا']] },
+    { sp: { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }, groups: [['12'], ['المهندس أحمد', 'عبد الفتاح']] },
+    { sp: { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }, groups: [['م/يحيي', 'اسلام'], ['شقة', '20']] },
+  ]
+  for (const c of cases) {
+    const design = makeDesign('l19', signFromSpec(c.sp), botElements(c.sp, c.groups))
+    const patches = await arrangeDesign(design, { mode: 'canonical' })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+    const label = `LAW 19 @${c.sp.layout} ${c.sp.w}x${c.sp.h}`
+    const { texts, div } = await placed(design)
+    assert(div !== null, label, 'divider vanished')
+    if (!div) continue
+    assertDividerClear(design, label, 1)
+    // and the text: at least 1mm of air between any line and the divider
+    const dl = div.vertical ? div.x - div.thickness / 2 : div.x - div.length / 2
+    const dr = div.vertical ? div.x + div.thickness / 2 : div.x + div.length / 2
+    const dt = div.vertical ? div.y - div.length / 2 : div.y - div.thickness / 2
+    const db = div.vertical ? div.y + div.length / 2 : div.y + div.thickness / 2
+    for (const t of texts) {
+      const gapX = Math.max(dl - t.right, t.left - dr)
+      const gapY = Math.max(dt - t.bottom, t.top - db)
+      assert(Math.max(gapX, gapY) >= 1, label, `"${t.el.text}" is ${Math.max(gapX, gapY).toFixed(1)}mm from the divider (needs >= 1)`)
+    }
+  }
 }
 
 /** LAW 17: "Ahmed Ali" in a narrow LR column splits into AHMED over ALI when bigger. */
@@ -401,6 +493,8 @@ async function main() {
   await law15SiblingSizes()
   await law16ReadingDirection()
   await law17NameSplit()
+  await law18NumberScale()
+  await law19DividerClear()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')
