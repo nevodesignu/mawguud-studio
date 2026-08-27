@@ -202,9 +202,9 @@ async function goldenMaster() {
   near(byText('شقة').heightMm, 25.5, 0.5, 'label height')
   near(byText('20').heightMm, 60, 0.5, 'number height')
   const d = design.elements.find((e) => e.kind === 'divider')
-  // re-baselined 2026-08-27 after the owner asked for tighter line stacking
-  // (STACK_GAP 0.3 -> 0.14): shorter blocks -> shorter content-matched divider
-  if (d && d.kind === 'divider') near(d.length, 105.2, 2, 'divider length')
+  // re-baselined 2026-08-27 (x2): ink-extent stacking measures true block
+  // heights (descenders included) so the content-matched divider follows
+  if (d && d.kind === 'divider') near(d.length, 118.4, 2, 'divider length')
 }
 
 async function main() {
