@@ -27,8 +27,8 @@ const LABEL_RE =
   /^(شقة|شقه|فيلا|عمارة|عماره|دور|مكتب|محل|عيادة|عياده|رقم|بدروم|villa|apt\.?|apartment|flat|office|floor|shop|unit|no\.?|bezmnt|basement)$/i
 
 const RATIO: Record<Measured['role'], number> = { name: 1.0, number: 2.0, label: 0.85 }
-const STACK_GAP = 0.3 // fraction of mean line height
-const WIDTH_FILL = 0.72 // ensemble width target as fraction of board width
+const STACK_GAP = 0.14 // lines sit close together, like the production files
+const WIDTH_FILL = 0.78 // ensemble width target as fraction of board width
 const HEIGHT_FILL = 0.74 // ensemble height cap
 const DIV_GAP_X = 0.045 // gap between divider and each block, fraction of W
 const DIV_GAP_Y = 0.05 // for horizontal dividers, fraction of H
@@ -87,8 +87,23 @@ const stackHeightMm = (lines: Measured[], s: number) => {
 
 const blockWidthMm = (lines: Measured[], s: number) => (lines.length ? Math.max(...lines.map((m) => m.aspect * f1(ratioOf(m) * s))) : 0)
 
+export interface ArrangeOpts {
+  /**
+   * Perfect-it mode: the user's current sizes are a FLOOR. The canonical scale
+   * can match or grow them but never shrink below what the user set by hand -
+   * except past the physical limits of the board.
+   */
+  respectSizes?: boolean
+}
+
+/** The user's expressed scale intent: the largest current height per ratio unit. */
+const userScale = (groups: Measured[][]) => {
+  const all = groups.flat()
+  return all.length ? Math.max(...all.map((m) => Math.max(1, m.el.heightMm) / ratioOf(m))) : 0
+}
+
 /** Compute perfect-layout patches for every element (keyed by element id). */
-export async function arrangeDesign(design: Design): Promise<Record<string, ElPatch>> {
+export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Promise<Record<string, ElPatch>> {
   const { w, h } = design.sign
   const patches: Record<string, ElPatch> = {}
   const texts = design.elements.filter((e): e is TextEl => e.kind === 'text' && e.text.trim().length > 0)
@@ -119,6 +134,16 @@ export async function arrangeDesign(design: Design): Promise<Record<string, ElPa
       s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
       for (const m of g) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
     }
+    if (opts.respectSizes) {
+      // never shrink below what the user set - up to the physical board limits
+      let sHard = unitsW > 0 ? (0.92 * w - gapsW) / unitsW : s
+      for (const g of [R, L]) {
+        if (!g.length) continue
+        sHard = Math.min(sHard, (0.9 * h) / stackUnits(g))
+        for (const m of g) sHard = Math.min(sHard, ((m.role === 'number' ? 0.38 : 0.5) * h) / ratioOf(m))
+      }
+      s = Math.max(s, Math.min(userScale([R, L]), sHard))
+    }
 
     const wR = blockWidthMm(R, s)
     const wL = blockWidthMm(L, s)
@@ -146,6 +171,14 @@ export async function arrangeDesign(design: Design): Promise<Record<string, ElPa
       s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
       s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
     }
+    if (opts.respectSizes) {
+      let sHard = unitsH > 0 ? (0.92 * h - gapsH) / unitsH : s
+      for (const m of measured) {
+        sHard = Math.min(sHard, (0.92 * w) / (m.aspect * ratioOf(m)))
+        sHard = Math.min(sHard, ((m.role === 'number' ? 0.38 : 0.5) * h) / ratioOf(m))
+      }
+      s = Math.max(s, Math.min(userScale([top, bottom]), sHard))
+    }
 
     const hT = stackHeightMm(top, s)
     const hB = stackHeightMm(bottom, s)
@@ -168,6 +201,11 @@ export async function arrangeDesign(design: Design): Promise<Record<string, ElPa
       for (const m of lines) {
         s = Math.min(s, (0.72 * w) / (m.aspect * ratioOf(m)))
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
+      }
+      if (opts.respectSizes) {
+        let sHard = (0.9 * h) / stackUnits(lines)
+        for (const m of lines) sHard = Math.min(sHard, (0.92 * w) / (m.aspect * ratioOf(m)))
+        s = Math.max(s, Math.min(userScale([lines]), sHard))
       }
       placeStack(lines, s, w / 2, h / 2, patches)
     }
