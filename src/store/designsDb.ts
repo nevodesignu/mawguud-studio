@@ -1,7 +1,6 @@
-import { createStore, get, set, del, values } from 'idb-keyval'
+// Designs persist as real JSON files on disk via the dev server (/api/designs).
+// Browser storage is NOT trusted - embedded preview panes can wipe it anytime.
 import type { Design } from '../model'
-
-const db = createStore('mawguud-designs', 'designs')
 
 export interface DesignMeta {
   id: string
@@ -11,19 +10,27 @@ export interface DesignMeta {
 }
 
 export async function saveDesign(design: Design): Promise<void> {
-  await set(design.id, design, db)
+  await fetch(`/api/designs/${design.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(design),
+  })
 }
 
 export async function loadDesignById(id: string): Promise<Design | undefined> {
-  return get<Design>(id, db)
+  const res = await fetch(`/api/designs/${id}`)
+  if (!res.ok) return undefined
+  return (await res.json()) as Design
 }
 
 export async function deleteDesignById(id: string): Promise<void> {
-  await del(id, db)
+  await fetch(`/api/designs/${id}`, { method: 'DELETE' })
 }
 
 export async function listDesigns(): Promise<DesignMeta[]> {
-  const all = (await values(db)) as Design[]
+  const res = await fetch('/api/designs')
+  if (!res.ok) return []
+  const all = (await res.json()) as Design[]
   return all
     .map((d) => ({
       id: d.id,

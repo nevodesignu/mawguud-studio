@@ -15,6 +15,7 @@ interface DragState {
   fixedY?: number
   divStartTh?: number
   divStartPerp?: number
+  wasSelected?: boolean
   startWX: number
   startWY: number
   groupStart?: Map<string, { x: number; y: number }>
@@ -72,11 +73,22 @@ export function Canvas() {
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<DragState | null>(null)
   const onPointerUpRef = useRef<() => void>(() => {})
+  const openEditorRef = useRef<(id: string) => void>(() => {})
   const [guides, setGuides] = useState<{ v: number | null; h: number | null }>({ v: null, h: null })
   const [marquee, setMarquee] = useState<Box | null>(null)
   const [editing, setEditing] = useState<{ id: string; original: string } | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ sx: number; sy: number; wx: number; wy: number } | null>(null)
   const lastTapRef = useRef<{ elId: string; time: number; x: number; y: number } | null>(null)
+
+  const openEditor = useCallback((id: string) => {
+    const s = useStudio.getState()
+    const el = s.design.elements.find((x) => x.id === id)
+    if (!el || el.kind !== 'text') return
+    s.select(id)
+    s.beginGesture()
+    setEditing({ id, original: el.text })
+  }, [])
+  openEditorRef.current = openEditor
 
   const closeEditor = useCallback((commit: boolean) => {
     setEditing((cur) => {
@@ -201,6 +213,12 @@ export function Canvas() {
           e.preventDefault()
           s.removeSelected()
           break
+        case 'Enter':
+          if (s.mode === 'design' && s.selectedIds.length === 1) {
+            e.preventDefault()
+            openEditorRef.current(s.selectedIds[0])
+          }
+          break
         case 'Escape':
           s.select(null)
           break
@@ -231,11 +249,7 @@ export function Canvas() {
     if (mode !== 'design' || editing) return
     const elId = (e.target as SVGElement).getAttribute('data-elid')
     if (!elId) return
-    const el = useStudio.getState().design.elements.find((x) => x.id === elId)
-    if (el && el.kind === 'text') {
-      useStudio.getState().beginGesture()
-      setEditing({ id: elId, original: el.text })
-    }
+    openEditor(elId)
   }
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -339,22 +353,21 @@ export function Canvas() {
       const now = performance.now()
       const last = lastTapRef.current
       lastTapRef.current = { elId, time: now, x: e.clientX, y: e.clientY }
-      if (last && last.elId === elId && now - last.time < 420 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 8) {
+      if (last && last.elId === elId && now - last.time < 650 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 10) {
         const el = s.design.elements.find((x) => x.id === elId)
         if (el && el.kind === 'text') {
           lastTapRef.current = null
-          s.select(elId)
-          s.beginGesture()
-          setEditing({ id: elId, original: el.text })
+          openEditor(elId)
           return
         }
       }
+      const wasSelected = s.selectedIds.length === 1 && s.selectedIds[0] === elId
       if (!s.selectedIds.includes(elId)) s.select(elId)
       const ids = useStudio.getState().selectedIds
       const groupStart = new Map<string, { x: number; y: number }>()
       for (const el of s.design.elements) if (ids.includes(el.id)) groupStart.set(el.id, { x: el.x, y: el.y })
       s.beginGesture()
-      dragRef.current = { kind: 'move', elId, startWX: wx, startWY: wy, groupStart }
+      dragRef.current = { kind: 'move', elId, startWX: wx, startWY: wy, groupStart, wasSelected }
       return
     }
 
@@ -398,6 +411,9 @@ export function Canvas() {
     if (drag.kind === 'move' && drag.elId && drag.groupStart) {
       const primaryStart = drag.groupStart.get(drag.elId)
       if (!primaryStart) return
+      // dead-zone: click jitter and spurious forwarded pointer-moves must not
+      // nudge elements - a drag only starts after real travel
+      if (!drag.moved && Math.hypot(wx - drag.startWX, wy - drag.startWY) * s.zoom < 4) return
       let dx = wx - drag.startWX
       let dy = wy - drag.startWY
       // snap by the primary dragged element's centre
@@ -492,6 +508,12 @@ export function Canvas() {
     dragRef.current = null
     setGuides({ v: null, h: null })
     setMarquee(null)
+    // click-again-to-edit: a stationary click on an ALREADY selected text
+    // opens the editor - no timing window, immune to flaky double-clicks
+    if (drag && drag.kind === 'move' && !drag.moved && drag.wasSelected && drag.elId) {
+      const el = s.design.elements.find((x) => x.id === drag.elId)
+      if (el && el.kind === 'text') openEditor(drag.elId)
+    }
   }
   onPointerUpRef.current = onPointerUp
 
