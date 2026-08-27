@@ -194,6 +194,9 @@ export function addBridges(
   const tinyHoles: { center: Pt; area: number }[] = []
   const outGeometry: MultiPoly = []
   const allBridges: Bridge[] = []
+  // spans ALL islands: two identical letters in different islands produce the
+  // same relative centroid, and duplicate keys break overrides and React keys
+  const usedKeys = new Set<string>()
 
   for (const poly of mp) {
     let current: MultiPoly = [poly]
@@ -219,7 +222,6 @@ export function addBridges(
       .sort((h1, h2) => ringArea(h2) - ringArea(h1))
 
     const placedRects: Ring[] = []
-    const usedKeys = new Set<string>()
 
     for (const hole of big) {
       let key = holeKey(elId, hole, originX, originY)

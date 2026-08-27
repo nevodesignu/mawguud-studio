@@ -56,6 +56,7 @@ export function Canvas() {
   const [guides, setGuides] = useState<{ v: number | null; h: number | null }>({ v: null, h: null })
   const [marquee, setMarquee] = useState<Box | null>(null)
   const [editing, setEditing] = useState<{ id: string; original: string } | null>(null)
+  const editingRef = useRef<{ id: string; original: string } | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ sx: number; sy: number; wx: number; wy: number } | null>(null)
   const lastTapRef = useRef<{ elId: string; time: number; x: number; y: number } | null>(null)
 
@@ -65,20 +66,22 @@ export function Canvas() {
     if (!el || el.kind !== 'text') return
     s.select(id)
     s.beginGesture()
-    setEditing({ id, original: el.text })
+    editingRef.current = { id, original: el.text }
+    setEditing(editingRef.current)
   }, [])
   openEditorRef.current = openEditor
 
   const closeEditor = useCallback((commit: boolean) => {
-    setEditing((cur) => {
-      if (cur) {
-        const s = useStudio.getState()
-        const el = s.design.elements.find((x) => x.id === cur.id)
-        if (!commit && el && el.kind === 'text') s.updateEl(cur.id, { text: cur.original })
-        s.endGesture(commit && !!el && el.kind === 'text' && el.text !== cur.original)
-      }
-      return null
-    })
+    // the ref (not a setEditing updater) guards double-close: React runs
+    // updaters during render, where store writes are illegal
+    const cur = editingRef.current
+    if (!cur) return
+    editingRef.current = null
+    setEditing(null)
+    const s = useStudio.getState()
+    const el = s.design.elements.find((x) => x.id === cur.id)
+    if (!commit && el && el.kind === 'text') s.updateEl(cur.id, { text: cur.original })
+    s.endGesture(commit && !!el && el.kind === 'text' && el.text !== cur.original)
   }, [])
 
   const toWorld = useCallback((clientX: number, clientY: number): [number, number] => {
@@ -610,11 +613,7 @@ export function Canvas() {
           )
           return (
             <div className="ctx-menu" style={{ left: Math.min(ctxMenu.sx, (wrapRef.current?.clientWidth ?? 400) - 170), top: Math.min(ctxMenu.sy, (wrapRef.current?.clientHeight ?? 400) - 280) }}>
-              {mode === 'design' && singleText &&
-                item('Edit text', () => {
-                  s.beginGesture()
-                  setEditing({ id: singleText.id, original: singleText.text })
-                })}
+              {mode === 'design' && singleText && item('Edit text', () => openEditor(singleText.id))}
               {mode === 'design' && sel.length > 0 && item('Copy', () => s.copySelected())}
               {mode === 'design' && sel.length > 0 && item('Cut', () => s.cutSelected())}
               {mode === 'design' && item('Paste here', () => s.paste({ x: ctxMenu.wx, y: ctxMenu.wy }), !hasClipboard())}
