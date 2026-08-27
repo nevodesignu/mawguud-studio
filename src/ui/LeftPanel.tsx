@@ -4,6 +4,7 @@ import { templateCatalog, finishLabel, layoutLabel, type Finish, type Layout } f
 import { addUploadedFont, removeUploadedFont, builtinFonts, listUploadedFonts } from '../fonts/catalog'
 import { evictFont, shapedSync } from '../shaping/service'
 import { renderTextEl } from './textRender'
+import { SignBot } from './SignBot'
 
 type Tab = 'designs' | 'templates' | 'fonts'
 
@@ -29,9 +30,14 @@ function Templates() {
   const st = useStudio.getState()
   const [finish, setFinish] = useState<Finish>('lighted')
   const [layout, setLayout] = useState<Layout>('leftright')
+  const [botOpen, setBotOpen] = useState(false)
   const sizes = templateCatalog.filter((t) => t.finish === finish && t.layout === layout)
   return (
     <div className="list">
+      <button className="primary" onClick={() => setBotOpen(true)}>
+        🤖 Sign Bot — make my sign
+      </button>
+      {botOpen && <SignBot onClose={() => setBotOpen(false)} />}
       <div className="tabs">
         {(['lighted', 'mirror'] as Finish[]).map((f) => (
           <button key={f} className={finish === f ? 'tab active' : 'tab'} onClick={() => setFinish(f)}>

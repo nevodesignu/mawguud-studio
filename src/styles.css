@@ -199,6 +199,70 @@ body {
   stroke: #ff3ec8;
 }
 
+.group-box {
+  fill: none;
+  stroke: var(--accent-2);
+}
+
+.marquee {
+  fill: rgba(23, 200, 163, 0.08);
+  stroke: var(--accent);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 10, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  width: 420px;
+  max-width: 92vw;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.modal h2 {
+  font-size: 17px;
+  margin-bottom: 6px;
+}
+
+.modal h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  margin: 14px 0 8px;
+}
+
+.bot-line {
+  display: flex;
+  gap: 6px;
+}
+
+.bot-line input {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 15px;
+}
+
+.bot-line input:focus {
+  outline: none;
+  border-color: var(--accent-2);
+}
+
 .bridge {
   fill: rgba(23, 200, 163, 0.85);
   stroke: #06251e;

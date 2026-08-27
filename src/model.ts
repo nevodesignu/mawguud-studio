@@ -211,11 +211,10 @@ export const layoutLabel: Record<Layout, string> = { leftright: 'Left | Right', 
 const AR = 'tajawal-bold'
 const NUM = 'poppins-bold'
 
-export function makeFromSpec(spec: TemplateSpec): Design {
-  const { w, h } = spec
-  const sign: SignSpec = {
-    w,
-    h,
+export function signFromSpec(spec: TemplateSpec): SignSpec {
+  return {
+    w: spec.w,
+    h: spec.h,
     radius: 0, // Mawguud boards are sharp-cornered
     bolts: true,
     boltDia: spec.boltDia,
@@ -223,6 +222,14 @@ export function makeFromSpec(spec: TemplateSpec): Design {
     boltInsetY: spec.boltInsetY,
     boltPattern: spec.boltPattern,
   }
+}
+
+export const specName = (spec: TemplateSpec) =>
+  `${finishLabel[spec.finish]} ${layoutLabel[spec.layout]} ${spec.w / 10}x${spec.h / 10}`
+
+export function makeFromSpec(spec: TemplateSpec): Design {
+  const { w, h } = spec
+  const sign = signFromSpec(spec)
   const els: El[] = []
   if (spec.layout === 'leftright') {
     els.push(divider(w / 2, h / 2, h * 0.64, spec.divThick, true))
@@ -240,8 +247,45 @@ export function makeFromSpec(spec: TemplateSpec): Design {
     els.push(text('عائلة', AR, h * 0.055, w / 2, h * 0.42))
     els.push(text('الدرويش', AR, h * 0.055, w / 2, h * 0.52))
   }
-  const name = `${finishLabel[spec.finish]} ${layoutLabel[spec.layout]} ${w / 10}x${h / 10}`
-  return makeDesign(name, sign, els)
+  return makeDesign(specName(spec), sign, els)
+}
+
+export const isNumberLine = (s: string) => /^[0-9٠-٩۰-۹\s\/\-.]+$/.test(s.trim())
+
+/**
+ * Sign Bot: build elements from raw text lines. groups[0] is the primary side
+ * (right column / top), groups[1] the secondary. Rough positions only - the
+ * arrange engine makes them perfect right after.
+ */
+export function botElements(spec: TemplateSpec, groups: string[][]): El[] {
+  const { w, h } = spec
+  const els: El[] = []
+  const fontFor = (line: string) => (isNumberLine(line) ? NUM : AR)
+  const clean = (lines: string[]) => lines.map((l) => l.trim()).filter(Boolean)
+  const g0 = clean(groups[0] ?? [])
+  const g1 = clean(groups[1] ?? [])
+
+  const stack = (lines: string[], cx: number, top: number, bottom: number) => {
+    const n = lines.length
+    lines.forEach((line, i) => {
+      const y = top + ((i + 0.5) / Math.max(1, n)) * (bottom - top)
+      // numbers read bigger than names on real Mawguud signs (~1.6:1)
+      els.push(text(line, fontFor(line), isNumberLine(line) ? h * 0.16 : h * 0.1, cx, y))
+    })
+  }
+
+  if (spec.layout === 'leftright') {
+    els.push(divider(w / 2, h / 2, h * 0.64, spec.divThick, true))
+    stack(g0, w * 0.75, h * 0.2, h * 0.8) // right column (primary in Arabic)
+    stack(g1, w * 0.25, h * 0.2, h * 0.8)
+  } else {
+    const tall = h > w
+    const divY = tall ? h * 0.32 : h / 2
+    stack(g0, w / 2, h * 0.06, divY - h * 0.04)
+    els.push(divider(w / 2, divY, w * (tall ? 0.64 : 0.66), spec.divThick, false))
+    stack(g1, w / 2, divY + h * 0.04, h * 0.94)
+  }
+  return els
 }
 
 export function makeBlank(): Design {

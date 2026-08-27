@@ -34,15 +34,17 @@ function Num({ label, value, onChange, step = 1, min, max, suffix }: { label: st
 
 export function PropertiesPanel() {
   const design = useStudio((s) => s.design)
-  const selectedId = useStudio((s) => s.selectedId)
+  const selectedIds = useStudio((s) => s.selectedIds)
   const mode = useStudio((s) => s.mode)
   const fin = useStudio((s) => s.fin)
   const finalizing = useStudio((s) => s.finalizing)
   const finError = useStudio((s) => s.finError)
+  const arranging = useStudio((s) => s.arranging)
   const fonts = useStudio((s) => s.fonts)
   const st = useStudio.getState()
 
-  const sel = design.elements.find((e) => e.id === selectedId)
+  const sel = selectedIds.length === 1 ? design.elements.find((e) => e.id === selectedIds[0]) : undefined
+  const multi = selectedIds.length > 1
 
   return (
     <aside className="panel right">
@@ -93,6 +95,60 @@ export function PropertiesPanel() {
             <button onClick={() => void downloadClientPng(design)}>Download client preview .png</button>
           </div>
           <p className="hint">1:1 scale — the page is exactly {(design.sign.w / 10).toFixed(0)}×{(design.sign.h / 10).toFixed(0)} cm. Red hairline = cut line.</p>
+        </>
+      ) : multi ? (
+        <>
+          <h3>{selectedIds.length} elements selected</h3>
+          <div className="stack">
+            <button className="primary" disabled={arranging} onClick={() => void st.autoArrange()}>
+              ✨ Perfect the layout
+            </button>
+          </div>
+          <h3>Align</h3>
+          <div className="row">
+            <button onClick={() => st.alignSelected('board-h')}>Board ↔</button>
+            <button onClick={() => st.alignSelected('board-v')}>Board ↕</button>
+          </div>
+          <div className="row">
+            <button onClick={() => st.alignSelected('match-x')}>Same X</button>
+            <button onClick={() => st.alignSelected('match-y')}>Same Y</button>
+          </div>
+          <div className="row">
+            <button onClick={() => st.distributeSelectedV()}>Distribute ↓ evenly</button>
+          </div>
+          {design.elements.some((e) => e.kind === 'text' && selectedIds.includes(e.id)) && (
+            <>
+              <h3>All selected text</h3>
+              <label className="field">
+                <span>Font</span>
+                <span className="field-input">
+                  <select value="" onChange={(e) => e.target.value && st.setForSelectedTexts({ fontId: e.target.value })}>
+                    <option value="">— set for all —</option>
+                    {fonts.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </label>
+              <Num
+                label="Height"
+                value={(design.elements.find((e) => e.kind === 'text' && selectedIds.includes(e.id)) as { heightMm?: number })?.heightMm ?? 30}
+                step={1}
+                min={3}
+                suffix="mm"
+                onChange={(v) => st.setForSelectedTexts({ heightMm: v })}
+              />
+            </>
+          )}
+          <div className="row">
+            <button onClick={() => st.duplicateSelected()}>Duplicate</button>
+            <button className="danger" onClick={() => st.removeSelected()}>
+              Delete
+            </button>
+          </div>
+          <p className="hint">Ctrl+C / Ctrl+V copy &amp; paste, Ctrl+D duplicate, arrows nudge, drag empty canvas to box-select.</p>
         </>
       ) : sel ? (
         sel.kind === 'text' ? (
@@ -207,7 +263,17 @@ export function PropertiesPanel() {
             <button onClick={() => st.addText()}>+ Text</button>
             <button onClick={() => st.addDivider()}>+ Divider</button>
           </div>
-          <p className="hint">Select an element on the canvas to edit it. Arrows nudge 1mm (Shift = 5mm).</p>
+          <h3>Layout</h3>
+          <div className="stack">
+            <button className="primary" disabled={arranging} onClick={() => void st.autoArrange()}>
+              ✨ Perfect the layout
+            </button>
+          </div>
+          <p className="hint">
+            Centers text and divider on the board, sizes every line to fit its column, and spaces the stack evenly — like the production
+            templates.
+          </p>
+          <p className="hint">Shift-click for multi-select, drag empty canvas to box-select, Ctrl+C/V copy &amp; paste. Arrows nudge 1mm (Shift = 5mm).</p>
         </>
       )}
     </aside>

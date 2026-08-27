@@ -5,6 +5,7 @@ export function TopBar() {
   const design = useStudio((s) => s.design)
   const mode = useStudio((s) => s.mode)
   const saved = useStudio((s) => s.saved)
+  const arranging = useStudio((s) => s.arranging)
   const st = useStudio.getState()
 
   return (
@@ -13,6 +14,11 @@ export function TopBar() {
         MAWGUUD <span>STUDIO</span>
       </div>
       <input className="design-name" value={design.name} onChange={(e) => st.setName(e.target.value)} spellCheck={false} />
+      {mode === 'design' && (
+        <button className="primary" disabled={arranging} onClick={() => void st.autoArrange()} title="Center everything and size it to fit — perfectly">
+          ✨ Perfect it
+        </button>
+      )}
       <div className="seg">
         <button className={mode === 'design' ? 'active' : ''} onClick={() => st.setMode('design')}>
           1 · Design

@@ -3,17 +3,16 @@ import { useStudio } from '../store/studio'
 import { shapedSync } from '../shaping/service'
 import { renderTextEl } from './textRender'
 import { multiToD, barRing, roundedRectRing, circleRing, nearestOnRing } from '../geom/poly'
-import type { TextEl, DividerEl } from '../model'
+import type { TextEl, DividerEl, El } from '../model'
 import { boltCenters } from '../model'
 
 interface DragState {
-  kind: 'move' | 'resize' | 'pan' | 'bridge'
+  kind: 'move' | 'resize' | 'pan' | 'bridge' | 'marquee'
   elId?: string
   moved?: boolean
   startWX: number
   startWY: number
-  elStartX?: number
-  elStartY?: number
+  groupStart?: Map<string, { x: number; y: number }>
   startHeight?: number
   startLength?: number
   startDist?: number
@@ -23,32 +22,56 @@ interface DragState {
   startClientY?: number
   bridgeKey?: string
   bridgeHole?: [number, number][]
+  baseSelection?: string[]
 }
+
+interface Box {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** Design-space bounding box of an element (uses the shaping cache for text). */
+function bboxOf(el: El): Box {
+  if (el.kind === 'divider') {
+    const w = el.vertical ? el.thickness : el.length
+    const h = el.vertical ? el.length : el.thickness
+    return { x: el.x - w / 2, y: el.y - h / 2, w, h }
+  }
+  const shaped = shapedSync(el.fontId, el.text, el.spacingEm)
+  if (shaped) {
+    const r = renderTextEl(el, shaped)
+    if (r) return r.bboxMm
+  }
+  return { x: el.x - 25, y: el.y - 6, w: 50, h: 12 }
+}
+
+const boxesIntersect = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 
 export function Canvas() {
   const design = useStudio((s) => s.design)
-  const selectedId = useStudio((s) => s.selectedId)
+  const selectedIds = useStudio((s) => s.selectedIds)
   const mode = useStudio((s) => s.mode)
   const zoom = useStudio((s) => s.zoom)
   const panX = useStudio((s) => s.panX)
   const panY = useStudio((s) => s.panY)
   const fin = useStudio((s) => s.fin)
   const finalizing = useStudio((s) => s.finalizing)
+  const arranging = useStudio((s) => s.arranging)
   useStudio((s) => s.shapeTick) // re-render when shaping results land
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<DragState | null>(null)
   const [guides, setGuides] = useState<{ v: number | null; h: number | null }>({ v: null, h: null })
+  const [marquee, setMarquee] = useState<Box | null>(null)
 
-  const toWorld = useCallback(
-    (clientX: number, clientY: number): [number, number] => {
-      const rect = svgRef.current!.getBoundingClientRect()
-      const s = useStudio.getState()
-      return [(clientX - rect.left - s.panX) / s.zoom, (clientY - rect.top - s.panY) / s.zoom]
-    },
-    [],
-  )
+  const toWorld = useCallback((clientX: number, clientY: number): [number, number] => {
+    const rect = svgRef.current!.getBoundingClientRect()
+    const s = useStudio.getState()
+    return [(clientX - rect.left - s.panX) / s.zoom, (clientY - rect.top - s.panY) / s.zoom]
+  }, [])
 
   // fit whenever another design is opened
   useEffect(() => {
@@ -89,50 +112,71 @@ export function Canvas() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       const s = useStudio.getState()
       const step = e.shiftKey ? 5 : 1
-      const sel = s.design.elements.find((el) => el.id === s.selectedId)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      const ctrl = e.ctrlKey || e.metaKey
+      const key = e.key.toLowerCase()
+      if (ctrl && key === 'z') {
         e.preventDefault()
         e.shiftKey ? s.redo() : s.undo()
         return
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      if (ctrl && key === 'y') {
         e.preventDefault()
         s.redo()
         return
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && sel) {
+      if (ctrl && key === 'a') {
         e.preventDefault()
-        s.duplicateEl(sel.id)
+        s.selectAll()
         return
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+      if (ctrl && key === 'c') {
+        e.preventDefault()
+        s.copySelected()
+        return
+      }
+      if (ctrl && key === 'x') {
+        e.preventDefault()
+        s.cutSelected()
+        return
+      }
+      if (ctrl && key === 'v') {
+        e.preventDefault()
+        s.paste()
+        return
+      }
+      if (ctrl && key === 'd') {
+        e.preventDefault()
+        s.duplicateSelected()
+        return
+      }
+      if (ctrl && e.key === '0') {
         e.preventDefault()
         const el = wrapRef.current
         if (el) s.fitView(el.clientWidth, el.clientHeight)
         return
       }
-      if (!sel) return
+      if (!s.selectedIds.length) return
       switch (e.key) {
         case 'ArrowLeft':
           e.preventDefault()
-          s.updateEl(sel.id, { x: sel.x - step })
+          s.moveSelected(-step, 0)
           break
         case 'ArrowRight':
           e.preventDefault()
-          s.updateEl(sel.id, { x: sel.x + step })
+          s.moveSelected(step, 0)
           break
         case 'ArrowUp':
           e.preventDefault()
-          s.updateEl(sel.id, { y: sel.y - step })
+          s.moveSelected(0, -step)
           break
         case 'ArrowDown':
           e.preventDefault()
-          s.updateEl(sel.id, { y: sel.y + step })
+          s.moveSelected(0, step)
           break
         case 'Delete':
         case 'Backspace':
           e.preventDefault()
-          s.removeEl(sel.id)
+          s.removeSelected()
           break
         case 'Escape':
           s.select(null)
@@ -165,8 +209,8 @@ export function Canvas() {
     }
 
     const handle = target.getAttribute('data-handle')
-    if (handle && s.selectedId) {
-      const el = s.design.elements.find((x) => x.id === s.selectedId)
+    if (handle && s.selectedIds.length === 1) {
+      const el = s.design.elements.find((x) => x.id === s.selectedIds[0])
       if (el) {
         s.beginGesture()
         dragRef.current = {
@@ -184,13 +228,25 @@ export function Canvas() {
 
     const elId = target.getAttribute('data-elid')
     if (elId && mode === 'design') {
-      const el = s.design.elements.find((x) => x.id === elId)
-      if (el) {
-        s.select(elId)
-        s.beginGesture()
-        dragRef.current = { kind: 'move', elId, startWX: wx, startWY: wy, elStartX: el.x, elStartY: el.y }
+      const additive = e.shiftKey || e.ctrlKey || e.metaKey
+      if (additive) {
+        s.select(elId, true)
         return
       }
+      if (!s.selectedIds.includes(elId)) s.select(elId)
+      const ids = useStudio.getState().selectedIds
+      const groupStart = new Map<string, { x: number; y: number }>()
+      for (const el of s.design.elements) if (ids.includes(el.id)) groupStart.set(el.id, { x: el.x, y: el.y })
+      s.beginGesture()
+      dragRef.current = { kind: 'move', elId, startWX: wx, startWY: wy, groupStart }
+      return
+    }
+
+    if (mode === 'design') {
+      // empty canvas: start marquee selection
+      dragRef.current = { kind: 'marquee', startWX: wx, startWY: wy, baseSelection: e.shiftKey ? s.selectedIds : [] }
+      if (!e.shiftKey) s.select(null)
+      return
     }
     s.select(null)
   }
@@ -205,35 +261,64 @@ export function Canvas() {
       s.setView(s.zoom, drag.startPanX! + (e.clientX - drag.startClientX!), drag.startPanY! + (e.clientY - drag.startClientY!))
       return
     }
+    if (drag.kind === 'marquee') {
+      const box: Box = {
+        x: Math.min(drag.startWX, wx),
+        y: Math.min(drag.startWY, wy),
+        w: Math.abs(wx - drag.startWX),
+        h: Math.abs(wy - drag.startWY),
+      }
+      setMarquee(box)
+      const hits = s.design.elements.filter((el) => boxesIntersect(box, bboxOf(el))).map((el) => el.id)
+      s.selectMany([...new Set([...(drag.baseSelection ?? []), ...hits])])
+      return
+    }
     if (drag.kind === 'bridge' && drag.bridgeHole && drag.bridgeKey) {
       const { t } = nearestOnRing(drag.bridgeHole, [wx, wy])
       drag.moved = true
       s.setBridgeOverride(drag.bridgeKey, t)
       return
     }
-    if (drag.kind === 'move' && drag.elId) {
-      let nx = drag.elStartX! + (wx - drag.startWX)
-      let ny = drag.elStartY! + (wy - drag.startWY)
+    if (drag.kind === 'move' && drag.elId && drag.groupStart) {
+      const primaryStart = drag.groupStart.get(drag.elId)
+      if (!primaryStart) return
+      let dx = wx - drag.startWX
+      let dy = wy - drag.startWY
+      // snap by the primary dragged element's centre
       const snapTol = 5 / s.zoom
-      const candX = [s.design.sign.w / 2, ...s.design.elements.filter((el) => el.id !== drag.elId).map((el) => el.x)]
-      const candY = [s.design.sign.h / 2, ...s.design.elements.filter((el) => el.id !== drag.elId).map((el) => el.y)]
+      const others = s.design.elements.filter((el) => !drag.groupStart!.has(el.id))
+      const candX = [s.design.sign.w / 2, ...others.map((el) => el.x)]
+      const candY = [s.design.sign.h / 2, ...others.map((el) => el.y)]
       let gv: number | null = null
       let gh: number | null = null
+      const px = primaryStart.x + dx
+      const py = primaryStart.y + dy
       for (const c of candX)
-        if (Math.abs(nx - c) < snapTol) {
-          nx = c
+        if (Math.abs(px - c) < snapTol) {
+          dx += c - px
           gv = c
           break
         }
       for (const c of candY)
-        if (Math.abs(ny - c) < snapTol) {
-          ny = c
+        if (Math.abs(py - c) < snapTol) {
+          dy += c - py
           gh = c
           break
         }
       setGuides({ v: gv, h: gh })
       drag.moved = true
-      s.updateEl(drag.elId, { x: Math.round(nx * 10) / 10, y: Math.round(ny * 10) / 10 })
+      s.mutate(
+        (d) => {
+          for (const el of d.elements) {
+            const st = drag.groupStart!.get(el.id)
+            if (st) {
+              el.x = Math.round((st.x + dx) * 10) / 10
+              el.y = Math.round((st.y + dy) * 10) / 10
+            }
+          }
+        },
+        { history: false },
+      )
       return
     }
     if (drag.kind === 'resize' && drag.elId) {
@@ -260,6 +345,7 @@ export function Canvas() {
     }
     dragRef.current = null
     setGuides({ v: null, h: null })
+    setMarquee(null)
   }
 
   const { sign } = design
@@ -267,6 +353,17 @@ export function Canvas() {
   const holes = boltCenters(sign).map(([x, y]) => multiToD([[circleRing(x, y, sign.boltDia / 2)]]))
 
   const px = (n: number) => n / zoom // constant screen-size in world units
+
+  const selectedEls = design.elements.filter((el) => selectedIds.includes(el.id))
+  let groupBox: Box | null = null
+  if (mode === 'design' && selectedEls.length > 1) {
+    const boxes = selectedEls.map(bboxOf)
+    const minX = Math.min(...boxes.map((b) => b.x))
+    const minY = Math.min(...boxes.map((b) => b.y))
+    const maxX = Math.max(...boxes.map((b) => b.x + b.w))
+    const maxY = Math.max(...boxes.map((b) => b.y + b.h))
+    groupBox = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
 
   return (
     <div className="canvas-wrap" ref={wrapRef} onContextMenu={(e) => e.preventDefault()}>
@@ -282,7 +379,6 @@ export function Canvas() {
         <g transform={`translate(${panX} ${panY}) scale(${zoom})`}>
           {/* artboard */}
           <path d={outlineD} className="artboard" fillRule="evenodd" />
-          {/* 10mm grid */}
           <defs>
             <pattern id="grid10" width="10" height="10" patternUnits="userSpaceOnUse">
               <path d="M10 0H0V10" fill="none" stroke="var(--grid)" strokeWidth={px(1)} />
@@ -298,7 +394,21 @@ export function Canvas() {
           ))}
 
           {mode === 'design' && (
-            <DesignElements design={design} selectedId={selectedId} px={px} />
+            <g>
+              {design.elements.map((el) =>
+                el.kind === 'text' ? (
+                  <TextView key={el.id} el={el} selected={selectedIds.includes(el.id)} single={selectedIds.length === 1} px={px} />
+                ) : (
+                  <DividerView key={el.id} el={el} selected={selectedIds.includes(el.id)} single={selectedIds.length === 1} px={px} />
+                ),
+              )}
+              {groupBox && (
+                <rect x={groupBox.x - 3} y={groupBox.y - 3} width={groupBox.w + 6} height={groupBox.h + 6} className="group-box" strokeWidth={px(1.2)} strokeDasharray={`${px(6)} ${px(4)}`} pointerEvents="none" />
+              )}
+              {marquee && (
+                <rect x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} className="marquee" strokeWidth={px(1)} pointerEvents="none" />
+              )}
+            </g>
           )}
           {mode === 'finalize' && fin && (
             <g>
@@ -325,7 +435,7 @@ export function Canvas() {
       </svg>
       <div className="zoom-controls">
         <button onClick={() => useStudio.getState().setView(Math.min(20, zoom * 1.25), panX, panY)}>+</button>
-        <span>{Math.round(zoom * 25.4 / 96 * 100) >= 0 ? `${Math.round(zoom * 100) / 100}px/mm` : ''}</span>
+        <span>{`${Math.round(zoom * 100) / 100}px/mm`}</span>
         <button onClick={() => useStudio.getState().setView(Math.max(0.1, zoom / 1.25), panX, panY)}>−</button>
         <button
           onClick={() => {
@@ -336,7 +446,7 @@ export function Canvas() {
           fit
         </button>
       </div>
-      {finalizing && <div className="finalizing-badge">computing bridges…</div>}
+      {(finalizing || arranging) && <div className="finalizing-badge">{arranging ? 'arranging…' : 'computing bridges…'}</div>}
       {mode === 'finalize' && !finalizing && fin && (
         <div className="finalize-hint">drag a teal bridge to move it around its hole</div>
       )}
@@ -344,15 +454,7 @@ export function Canvas() {
   )
 }
 
-function DesignElements({ design, selectedId, px }: { design: ReturnType<typeof useStudio.getState>['design']; selectedId: string | null; px: (n: number) => number }) {
-  return (
-    <g>
-      {design.elements.map((el) => (el.kind === 'text' ? <TextView key={el.id} el={el} selected={el.id === selectedId} px={px} /> : <DividerView key={el.id} el={el} selected={el.id === selectedId} px={px} />))}
-    </g>
-  )
-}
-
-function SelectionBox({ x, y, w, h, px }: { x: number; y: number; w: number; h: number; px: (n: number) => number }) {
+function SelectionBox({ x, y, w, h, px, handles }: { x: number; y: number; w: number; h: number; px: (n: number) => number; handles: boolean }) {
   const hs = px(9)
   const corners: [number, number][] = [
     [x, y],
@@ -363,14 +465,15 @@ function SelectionBox({ x, y, w, h, px }: { x: number; y: number; w: number; h: 
   return (
     <g>
       <rect x={x} y={y} width={w} height={h} className="selection" strokeWidth={px(1.4)} pointerEvents="none" />
-      {corners.map(([cx, cy], i) => (
-        <rect key={i} x={cx - hs / 2} y={cy - hs / 2} width={hs} height={hs} className="handle" data-handle={String(i)} strokeWidth={px(1)} />
-      ))}
+      {handles &&
+        corners.map(([cx, cy], i) => (
+          <rect key={i} x={cx - hs / 2} y={cy - hs / 2} width={hs} height={hs} className="handle" data-handle={String(i)} strokeWidth={px(1)} />
+        ))}
     </g>
   )
 }
 
-function TextView({ el, selected, px }: { el: TextEl; selected: boolean; px: (n: number) => number }) {
+function TextView({ el, selected, single, px }: { el: TextEl; selected: boolean; single: boolean; px: (n: number) => number }) {
   const shaped = shapedSync(el.fontId, el.text, el.spacingEm)
   if (!shaped) {
     return (
@@ -396,12 +499,12 @@ function TextView({ el, selected, px }: { el: TextEl; selected: boolean; px: (n:
         <path d={r.d} fill="var(--ink)" pointerEvents="none" />
       </g>
       <rect x={bb.x - pad} y={bb.y - pad} width={bb.w + pad * 2} height={bb.h + pad * 2} fill="transparent" data-elid={el.id} style={{ cursor: 'move' }} />
-      {selected && <SelectionBox x={bb.x - pad} y={bb.y - pad} w={bb.w + pad * 2} h={bb.h + pad * 2} px={px} />}
+      {selected && <SelectionBox x={bb.x - pad} y={bb.y - pad} w={bb.w + pad * 2} h={bb.h + pad * 2} px={px} handles={single} />}
     </g>
   )
 }
 
-function DividerView({ el, selected, px }: { el: DividerEl; selected: boolean; px: (n: number) => number }) {
+function DividerView({ el, selected, single, px }: { el: DividerEl; selected: boolean; single: boolean; px: (n: number) => number }) {
   const ring = barRing(el.x, el.y, el.length, el.thickness, el.vertical, el.roundCaps)
   const d = multiToD([[ring]])
   const w = el.vertical ? el.thickness : el.length
@@ -411,7 +514,7 @@ function DividerView({ el, selected, px }: { el: DividerEl; selected: boolean; p
     <g>
       <path d={d} fill="var(--ink)" pointerEvents="none" />
       <rect x={el.x - w / 2 - pad} y={el.y - h / 2 - pad} width={w + pad * 2} height={h + pad * 2} fill="transparent" data-elid={el.id} style={{ cursor: 'move' }} />
-      {selected && <SelectionBox x={el.x - w / 2 - pad} y={el.y - h / 2 - pad} w={w + pad * 2} h={h + pad * 2} px={px} />}
+      {selected && <SelectionBox x={el.x - w / 2 - pad} y={el.y - h / 2 - pad} w={w + pad * 2} h={h + pad * 2} px={px} handles={single} />}
     </g>
   )
 }
