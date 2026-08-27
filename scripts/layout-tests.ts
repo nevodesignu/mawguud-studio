@@ -18,6 +18,9 @@ import { makeDesign, botElements, signFromSpec, type TemplateSpec, type Design, 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const FONT_FILES: Record<string, string> = {
+  'avenir-arabic-medium': 'public/fonts/AvenirArabic-Medium.otf',
+  'century-gothic-bold': 'public/fonts/CenturyGothic-Bold.ttf',
+  'century-gothic': 'public/fonts/CenturyGothic-Regular.ttf',
   'amiri-bold': 'public/fonts/Amiri-Bold.ttf',
   'tajawal-bold': 'public/fonts/Tajawal-Bold.ttf',
   'almarai-bold': 'public/fonts/Almarai-Bold.ttf',

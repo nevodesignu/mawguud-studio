@@ -206,10 +206,10 @@ export const templateCatalog: TemplateSpec[] = [
 export const finishLabel: Record<Finish, string> = { lighted: 'Lighted', mirror: 'Mirror' }
 export const layoutLabel: Record<Layout, string> = { leftright: 'Left | Right', updown: 'Up | Down', vertical: 'Vertical' }
 
-// Default Arabic font for seeded text. Their production font is Avenir Arabic
-// Medium (commercial) - once uploaded in the Fonts tab, pick it per element.
-const AR = 'tajawal-bold'
-const NUM = 'poppins-bold'
+// Defaults for seeded text: the real Mawguud production font for Arabic,
+// Century Gothic Bold for numbers/Latin (their geometric-sans look).
+const AR = 'avenir-arabic-medium'
+const NUM = 'century-gothic-bold'
 
 export function signFromSpec(spec: TemplateSpec): SignSpec {
   return {

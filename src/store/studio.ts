@@ -253,7 +253,7 @@ export const useStudio = create<StudioState>((set, get) => ({
         id: uid(),
         kind: 'text',
         text: 'نص جديد',
-        fontId: get().fonts.find((f) => f.id === 'amiri-bold')?.id ?? get().fonts[0]?.id ?? 'amiri-bold',
+        fontId: get().fonts.find((f) => f.id === 'avenir-arabic-medium')?.id ?? get().fonts[0]?.id ?? 'avenir-arabic-medium',
         heightMm: 30,
         x: d.sign.w / 2,
         y: d.sign.h / 2,

@@ -7,6 +7,9 @@ export interface FontMeta {
 }
 
 export const builtinFonts: (FontMeta & { url: string })[] = [
+  { id: 'avenir-arabic-medium', name: 'Avenir Arabic Medium ★ production', builtin: true, url: '/fonts/AvenirArabic-Medium.otf' },
+  { id: 'century-gothic-bold', name: 'Century Gothic Bold', builtin: true, url: '/fonts/CenturyGothic-Bold.ttf' },
+  { id: 'century-gothic', name: 'Century Gothic', builtin: true, url: '/fonts/CenturyGothic-Regular.ttf' },
   { id: 'amiri-bold', name: 'Amiri Bold (naskh)', builtin: true, url: '/fonts/Amiri-Bold.ttf' },
   { id: 'tajawal-bold', name: 'Tajawal Bold', builtin: true, url: '/fonts/Tajawal-Bold.ttf' },
   { id: 'almarai-bold', name: 'Almarai Bold', builtin: true, url: '/fonts/Almarai-Bold.ttf' },

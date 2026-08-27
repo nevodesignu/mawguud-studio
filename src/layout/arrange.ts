@@ -55,7 +55,9 @@ function equalized(all: Measured[], scaled: Map<string, number>): Map<string, nu
       start = i
     }
   }
-  for (const [id, v] of scaled) scaled.set(id, r1(v))
+  // floor to the 0.1mm grid: rounding UP could nudge a width back over its
+  // limit and make the next run shrink again (flip-flop instead of idempotent)
+  for (const [id, v] of scaled) scaled.set(id, Math.floor(v * 10) / 10)
   return scaled
 }
 
