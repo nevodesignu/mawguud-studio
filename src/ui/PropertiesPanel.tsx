@@ -1,21 +1,30 @@
+import { useState } from 'react'
 import { useStudio } from '../store/studio'
 import { downloadAi, downloadPdf, downloadProductionSvg, downloadClientPng } from './exportActions'
 
 function Num({ label, value, onChange, step = 1, min, max, suffix }: { label: string; value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number; suffix?: string }) {
+  // local draft so the field can be cleared while retyping; committed values
+  // are clamped so zero/negative dimensions can never reach the machine file
+  const [draft, setDraft] = useState<string | null>(null)
+  const shown = draft !== null ? draft : String(Number.isFinite(value) ? Math.round(value * 100) / 100 : 0)
   return (
     <label className="field">
       <span>{label}</span>
       <span className="field-input">
         <input
           type="number"
-          value={Number.isFinite(value) ? Math.round(value * 100) / 100 : 0}
+          value={shown}
           step={step}
           min={min}
           max={max}
           onChange={(e) => {
+            setDraft(e.target.value)
             const v = parseFloat(e.target.value)
-            if (Number.isFinite(v)) onChange(v)
+            if (Number.isFinite(v)) {
+              onChange(Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v)))
+            }
           }}
+          onBlur={() => setDraft(null)}
         />
         {suffix && <em>{suffix}</em>}
       </span>
@@ -29,6 +38,7 @@ export function PropertiesPanel() {
   const mode = useStudio((s) => s.mode)
   const fin = useStudio((s) => s.fin)
   const finalizing = useStudio((s) => s.finalizing)
+  const finError = useStudio((s) => s.finError)
   const fonts = useStudio((s) => s.fonts)
   const st = useStudio.getState()
 
@@ -49,6 +59,7 @@ export function PropertiesPanel() {
           <div className="row">
             <button onClick={() => st.clearBridgeOverrides()}>Reset bridges to auto</button>
           </div>
+          {finError && <div className="warning">⚠ {finError}</div>}
           {fin && fin.warnings.length > 0 && (
             <div className="warnings">
               {[...new Set(fin.warnings)].map((w, i) => (

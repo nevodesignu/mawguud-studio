@@ -7,8 +7,16 @@ let boot: Promise<void> | null = null
 export function bootHB(): Promise<void> {
   if (!boot) {
     boot = fetch(wasmUrl)
-      .then((r) => r.arrayBuffer())
+      .then((r) => {
+        if (!r.ok) throw new Error(`hb.wasm fetch failed: ${r.status}`)
+        return r.arrayBuffer()
+      })
       .then((bytes) => initHB(bytes))
+      .catch((err) => {
+        console.error('HarfBuzz boot failed', err)
+        boot = null // allow retry instead of caching the failure forever
+        throw err
+      })
   }
   return boot
 }

@@ -33,20 +33,17 @@ async function main() {
   const arabic = place(amiri, 'المهندس عبيد محمد', 34, 200, 178)
   const number = place(poppins, '34', 48, 200, 78)
   const mixed = place(amiri, 'فيلا 50', 20, 200, 228)
+  const divider: MultiPoly = [[barRing(200, 125, 300, 1.2, false, false)]]
+  // deliberately overlap a bar with the bottom text line: welding must happen
+  // BEFORE bridging so the welded compound still gets correct bridges
+  const crossBar: MultiPoly = [[barRing(200, 228, 320, 1.2, false, false)]]
 
-  let bridgeCount = 0
-  const shapes: MultiPoly[] = []
-  for (const [id, mp] of [
-    ['a', arabic],
-    ['n', number],
-    ['m', mixed],
-  ] as const) {
-    const outcome = addBridges(mp, id, defaultBridgeSettings, {})
-    bridgeCount += outcome.bridges.length
-    for (const w of outcome.warnings) console.log(`[warn ${id}] ${w}`)
-    shapes.push(outcome.geometry)
-  }
-  shapes.push([[barRing(200, 125, 300, 1.2, false, false)]])
+  // production order: weld everything, THEN bridge the combined shape
+  const combined = weld([arabic, number, mixed, divider, crossBar])
+  const outcome = addBridges(combined, 'doc', defaultBridgeSettings, {})
+  const bridgeCount = outcome.bridges.length
+  for (const w of outcome.warnings) console.log(`[warn] ${w}`)
+  const shapes: MultiPoly[] = [outcome.geometry]
 
   const cutLines: MultiPoly = [[roundedRectRing(0, 0, W, H, 10)]]
   for (const [x, y] of [
@@ -58,7 +55,7 @@ async function main() {
     cutLines.push([circleRing(x, y, 2)])
   }
 
-  const bytes = buildAiPdf({ wMm: W, hMm: H, cutLines, shapes: weld(shapes) })
+  const bytes = buildAiPdf({ wMm: W, hMm: H, cutLines, shapes: shapes[0] })
   mkdirSync(join(root, 'out'), { recursive: true })
   writeFileSync(join(root, 'out', 'smoke.ai'), bytes)
   writeFileSync(join(root, 'out', 'smoke.pdf'), bytes)

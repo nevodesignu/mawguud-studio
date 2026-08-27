@@ -2,26 +2,22 @@ import { create } from 'zustand'
 import type { Design, El, TextEl, SignSpec, FinalizeSettings } from '../model'
 import { templates, uid } from '../model'
 import type { MultiPoly, Pt } from '../geom/types'
+import { bboxOfMulti } from '../geom/types'
 import type { Bridge } from '../geom/bridges'
 import { addBridges } from '../geom/bridges'
 import { shapedAsync } from '../shaping/service'
 import { shapedToPolys } from '../shaping/engine'
 import { barRing } from '../geom/poly'
+import { weld, consumeGeometryErrors } from '../geom/weld'
 import { saveDesign, listDesigns, loadDesignById, deleteDesignById, type DesignMeta } from './designsDb'
 import type { FontMeta } from '../fonts/catalog'
 
-export interface FinalizeElResult {
-  id: string
-  raw: MultiPoly // welded, pre-bridges
-  geometry: MultiPoly // bridged
+export interface FinalizeResult {
+  combinedRaw: MultiPoly // all elements welded together, BEFORE bridges
+  geometry: MultiPoly // the true production shape: welded, bridged
   bridges: Bridge[]
   warnings: string[]
   tinyHoles: { center: Pt; area: number }[]
-}
-
-export interface FinalizeResult {
-  els: FinalizeElResult[]
-  warnings: string[]
 }
 
 export type Mode = 'design' | 'finalize'
@@ -38,6 +34,7 @@ interface StudioState {
   shapeTick: number
   fin: FinalizeResult | null
   finalizing: boolean
+  finError: string | null
   saved: boolean
 
   bumpShapeTick(): void
@@ -48,7 +45,7 @@ interface StudioState {
 
   mutate(fn: (d: Design) => void, opts?: { history?: boolean }): void
   beginGesture(): void
-  endGesture(): void
+  endGesture(commit?: boolean): void
   undo(): void
   redo(): void
 
@@ -62,9 +59,10 @@ interface StudioState {
 
   setMode(mode: Mode): void
   runFinalize(): Promise<void>
-  setBridgeOverride(key: string, t: number, elId: string): void
+  setBridgeOverride(key: string, t: number): void
   clearBridgeOverrides(): void
 
+  flushSave(): Promise<void>
   refreshDesigns(): Promise<void>
   openDesign(id: string): Promise<void>
   newFromTemplate(tplId: string): void
@@ -81,37 +79,50 @@ let gestureSnapshot: Design | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let finalizeToken = 0
 
+function pushHistory(snapshot: Design) {
+  past.push(snapshot)
+  if (past.length > 100) past.shift()
+  future = []
+}
+
 function scheduleSave(get: () => StudioState, set: (p: Partial<StudioState>) => void) {
   set({ saved: false })
   if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(async () => {
-    const d = get().design
-    d.updatedAt = Date.now()
-    await saveDesign(d)
-    set({ saved: true })
-    get().refreshDesigns()
-  }, 600)
+  saveTimer = setTimeout(() => void doSave(get, set), 600)
 }
 
-async function computeTextEl(el: TextEl, fin: FinalizeSettings, overrides: Record<string, number>): Promise<FinalizeElResult> {
+async function doSave(get: () => StudioState, set: (p: Partial<StudioState>) => void) {
+  saveTimer = null
+  const d = get().design
+  d.updatedAt = Date.now()
+  await saveDesign(d)
+  set({ saved: true })
+  void get().refreshDesigns()
+}
+
+const elLabel = (el: El) => (el.kind === 'text' ? `"${el.text.slice(0, 14)}"` : 'divider')
+
+async function rawGeometryOf(el: El): Promise<MultiPoly> {
+  if (el.kind === 'divider') {
+    return [[barRing(el.x, el.y, el.length, el.thickness, el.vertical, el.roundCaps)]]
+  }
   const shaped = await shapedAsync(el.fontId, el.text, el.spacingEm)
   const inkH = shaped.bbox.maxY - shaped.bbox.minY
-  if (!(inkH > 0)) {
-    return { id: el.id, raw: [], geometry: [], bridges: [], warnings: [], tinyHoles: [] }
-  }
+  if (!(inkH > 0)) return []
   const s = el.heightMm / inkH
   const cx = (shaped.bbox.minX + shaped.bbox.maxX) / 2
   const cy = (shaped.bbox.minY + shaped.bbox.maxY) / 2
-  const ox = el.x - cx * s
-  const oy = el.y + cy * s
-  const raw = shapedToPolys(shaped, s, ox, oy, 0.03)
-  const outcome = addBridges(raw, el.id, { width: fin.bridgeWidth, overshoot: 1, clearance: fin.clearance, minHoleArea: fin.minHoleArea, candidates: 48 }, overrides)
-  return { id: el.id, raw, geometry: outcome.geometry, bridges: outcome.bridges, warnings: outcome.warnings, tinyHoles: outcome.tinyHoles }
+  return shapedToPolys(shaped, s, el.x - cx * s, el.y + cy * s, 0.03)
 }
 
-function computeDividerEl(el: Exclude<El, TextEl>): FinalizeElResult {
-  const ring = barRing(el.x, el.y, el.length, el.thickness, el.vertical, el.roundCaps)
-  return { id: el.id, raw: [[ring]], geometry: [[ring]], bridges: [], warnings: [], tinyHoles: [] }
+function bridgeSettingsOf(design: Design) {
+  return {
+    width: design.fin.bridgeWidth,
+    overshoot: 1,
+    clearance: design.fin.clearance,
+    minHoleArea: design.fin.minHoleArea,
+    candidates: 48,
+  }
 }
 
 export const useStudio = create<StudioState>((set, get) => ({
@@ -126,6 +137,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   shapeTick: 0,
   fin: null,
   finalizing: false,
+  finError: null,
   saved: true,
 
   bumpShapeTick: () => set((s) => ({ shapeTick: s.shapeTick + 1 })),
@@ -140,13 +152,10 @@ export const useStudio = create<StudioState>((set, get) => ({
 
   mutate: (fn, opts = {}) => {
     const { history = true } = opts
-    const d = clone(get().design)
+    const before = get().design
+    const d = clone(before)
     fn(d)
-    if (history && !gestureSnapshot) {
-      past.push(clone(get().design))
-      if (past.length > 100) past.shift()
-      future = []
-    }
+    if (history && !gestureSnapshot) pushHistory(clone(before))
     set({ design: d })
     scheduleSave(get, set)
     if (get().mode === 'finalize') void get().runFinalize()
@@ -154,13 +163,13 @@ export const useStudio = create<StudioState>((set, get) => ({
   beginGesture: () => {
     gestureSnapshot = clone(get().design)
   },
-  endGesture: () => {
+  endGesture: (commit = true) => {
     if (gestureSnapshot) {
-      past.push(gestureSnapshot)
-      if (past.length > 100) past.shift()
-      future = []
+      if (commit) {
+        pushHistory(gestureSnapshot)
+        scheduleSave(get, set)
+      }
       gestureSnapshot = null
-      scheduleSave(get, set)
     }
   },
   undo: () => {
@@ -242,34 +251,60 @@ export const useStudio = create<StudioState>((set, get) => ({
     set({ mode })
     if (mode === 'finalize') void get().runFinalize()
   },
+
   runFinalize: async () => {
     const token = ++finalizeToken
     set({ finalizing: true })
     const { design } = get()
+    const warnings: string[] = []
     try {
-      const els: FinalizeElResult[] = []
+      const raws: MultiPoly[] = []
       for (const el of design.elements) {
-        els.push(el.kind === 'text' ? await computeTextEl(el, design.fin, design.bridgeOverrides) : computeDividerEl(el))
+        try {
+          raws.push(await rawGeometryOf(el))
+        } catch (err) {
+          console.error('element failed', el, err)
+          warnings.push(`Element ${elLabel(el)} could not be processed - is its font still installed?`)
+        }
       }
       if (token !== finalizeToken) return
-      const warnings = els.flatMap((e) => e.warnings)
-      set({ fin: { els, warnings }, finalizing: false })
+
+      // Weld EVERYTHING first, THEN bridge: bridging per element and welding
+      // afterwards can seal bridge tabs shut or create brand-new unbridged
+      // holes wherever elements touch.
+      const combinedRaw = weld(raws)
+      const outcome = addBridges(combinedRaw, 'doc', bridgeSettingsOf(design), design.bridgeOverrides)
+      warnings.push(...outcome.warnings, ...consumeGeometryErrors())
+
+      const bb = bboxOfMulti(outcome.geometry)
+      if (outcome.geometry.length && (bb.minX < -0.05 || bb.minY < -0.05 || bb.maxX > design.sign.w + 0.05 || bb.maxY > design.sign.h + 0.05)) {
+        warnings.push('Artwork extends outside the board - move or shrink it before cutting.')
+      }
+
+      if (token !== finalizeToken) return
+      set({
+        fin: { combinedRaw, geometry: outcome.geometry, bridges: outcome.bridges, warnings, tinyHoles: outcome.tinyHoles },
+        finalizing: false,
+        finError: null,
+      })
     } catch (err) {
       console.error('finalize failed', err)
-      if (token === finalizeToken) set({ finalizing: false })
+      if (token === finalizeToken) {
+        set({ fin: null, finalizing: false, finError: 'Finalize failed - fix the design (or re-add the missing font) and try again.' })
+      }
     }
   },
-  setBridgeOverride: (key, t, elId) => {
-    // live path used while dragging a bridge: update override + recompute just that element
+
+  setBridgeOverride: (key, t) => {
+    // live path while dragging a bridge; history is handled by the drag gesture
     const { design, fin } = get()
-    design.bridgeOverrides[key] = t
     if (!fin) return
-    const el = design.elements.find((e) => e.id === elId)
-    const entry = fin.els.find((e) => e.id === elId)
-    if (!el || !entry || el.kind !== 'text') return
-    const outcome = addBridges(entry.raw, el.id, { width: design.fin.bridgeWidth, overshoot: 1, clearance: design.fin.clearance, minHoleArea: design.fin.minHoleArea, candidates: 48 }, design.bridgeOverrides)
-    const els = fin.els.map((e) => (e.id === elId ? { ...e, geometry: outcome.geometry, bridges: outcome.bridges, warnings: outcome.warnings } : e))
-    set({ fin: { els, warnings: els.flatMap((e) => e.warnings) }, design: { ...design } })
+    const nextDesign: Design = { ...design, bridgeOverrides: { ...design.bridgeOverrides, [key]: t } }
+    const outcome = addBridges(fin.combinedRaw, 'doc', bridgeSettingsOf(nextDesign), nextDesign.bridgeOverrides)
+    set({
+      design: nextDesign,
+      fin: { ...fin, geometry: outcome.geometry, bridges: outcome.bridges, warnings: [...outcome.warnings, ...consumeGeometryErrors()], tinyHoles: outcome.tinyHoles },
+    })
     scheduleSave(get, set)
   },
   clearBridgeOverrides: () =>
@@ -277,36 +312,63 @@ export const useStudio = create<StudioState>((set, get) => ({
       d.bridgeOverrides = {}
     }),
 
+  flushSave: async () => {
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      await doSave(get, set)
+    }
+  },
   refreshDesigns: async () => {
     set({ designs: await listDesigns() })
   },
   openDesign: async (id) => {
+    await get().flushSave()
     const d = await loadDesignById(id)
     if (!d) return
     past = []
     future = []
-    set({ design: d, selectedId: null, mode: 'design', fin: null })
+    gestureSnapshot = null
+    set({ design: d, selectedId: null, mode: 'design', fin: null, finError: null, saved: true })
   },
   newFromTemplate: (tplId) => {
     const tpl = templates.find((t) => t.id === tplId)
     if (!tpl) return
+    void get().flushSave()
     past = []
     future = []
+    gestureSnapshot = null
     const d = tpl.make()
-    set({ design: d, selectedId: null, mode: 'design', fin: null })
+    set({ design: d, selectedId: null, mode: 'design', fin: null, finError: null })
     scheduleSave(get, set)
   },
   deleteDesign: async (id) => {
-    await deleteDesignById(id)
+    if (id === get().design.id) {
+      // deleting the open design: drop its pending autosave so it stays deleted,
+      // and move the editor to a fresh blank
+      if (saveTimer) {
+        clearTimeout(saveTimer)
+        saveTimer = null
+      }
+      await deleteDesignById(id)
+      past = []
+      future = []
+      gestureSnapshot = null
+      const blank = templates[templates.length - 1].make()
+      set({ design: blank, selectedId: null, mode: 'design', fin: null, finError: null, saved: true })
+    } else {
+      await deleteDesignById(id)
+    }
     await get().refreshDesigns()
   },
   duplicateDesign: () => {
+    void get().flushSave()
     const d = clone(get().design)
     d.id = uid()
     d.name = d.name + ' copy'
     past = []
     future = []
-    set({ design: d })
+    gestureSnapshot = null
+    set({ design: d, fin: null, finError: null, mode: 'design' })
     scheduleSave(get, set)
   },
   setName: (name) =>

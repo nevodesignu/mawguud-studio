@@ -8,6 +8,7 @@ import type { TextEl, DividerEl } from '../model'
 interface DragState {
   kind: 'move' | 'resize' | 'pan' | 'bridge'
   elId?: string
+  moved?: boolean
   startWX: number
   startWY: number
   elStartX?: number
@@ -154,11 +155,10 @@ export function Canvas() {
 
     const bridgeKey = target.getAttribute('data-bridge')
     if (bridgeKey && mode === 'finalize') {
-      const elId = target.getAttribute('data-bridge-el')!
-      const entry = s.fin?.els.find((x) => x.id === elId)
-      const bridge = entry?.bridges.find((b) => b.key === bridgeKey)
+      const bridge = s.fin?.bridges.find((b) => b.key === bridgeKey)
       if (bridge) {
-        dragRef.current = { kind: 'bridge', elId, bridgeKey, bridgeHole: bridge.holeRing, startWX: wx, startWY: wy }
+        s.beginGesture()
+        dragRef.current = { kind: 'bridge', bridgeKey, bridgeHole: bridge.holeRing, startWX: wx, startWY: wy }
         return
       }
     }
@@ -204,9 +204,10 @@ export function Canvas() {
       s.setView(s.zoom, drag.startPanX! + (e.clientX - drag.startClientX!), drag.startPanY! + (e.clientY - drag.startClientY!))
       return
     }
-    if (drag.kind === 'bridge' && drag.bridgeHole && drag.bridgeKey && drag.elId) {
+    if (drag.kind === 'bridge' && drag.bridgeHole && drag.bridgeKey) {
       const { t } = nearestOnRing(drag.bridgeHole, [wx, wy])
-      s.setBridgeOverride(drag.bridgeKey, t, drag.elId)
+      drag.moved = true
+      s.setBridgeOverride(drag.bridgeKey, t)
       return
     }
     if (drag.kind === 'move' && drag.elId) {
@@ -230,6 +231,7 @@ export function Canvas() {
           break
         }
       setGuides({ v: gv, h: gh })
+      drag.moved = true
       s.updateEl(drag.elId, { x: Math.round(nx * 10) / 10, y: Math.round(ny * 10) / 10 })
       return
     }
@@ -238,6 +240,7 @@ export function Canvas() {
       if (!el) return
       const dist = Math.hypot(wx - el.x, wy - el.y)
       const ratio = dist / drag.startDist!
+      drag.moved = true
       if (el.kind === 'text' && drag.startHeight) {
         s.updateEl(el.id, { heightMm: Math.max(3, Math.round(drag.startHeight * ratio * 10) / 10) })
       } else if (el.kind === 'divider' && drag.startLength) {
@@ -248,7 +251,12 @@ export function Canvas() {
 
   const onPointerUp = () => {
     const s = useStudio.getState()
-    if (dragRef.current && (dragRef.current.kind === 'move' || dragRef.current.kind === 'resize')) s.endGesture()
+    const drag = dragRef.current
+    if (drag && (drag.kind === 'move' || drag.kind === 'resize' || drag.kind === 'bridge')) {
+      // only commit an undo step if something actually changed - a plain
+      // click-select must not pollute the history
+      s.endGesture(!!drag.moved)
+    }
     dragRef.current = null
     setGuides({ v: null, h: null })
   }
@@ -279,6 +287,8 @@ export function Canvas() {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onLostPointerCapture={onPointerUp}
       >
         <g transform={`translate(${panX} ${panY}) scale(${zoom})`}>
           {/* artboard */}
@@ -303,22 +313,18 @@ export function Canvas() {
           )}
           {mode === 'finalize' && fin && (
             <g>
-              {fin.els.map((entry) => (
-                <g key={entry.id}>
-                  <path d={multiToD(entry.geometry)} fill="var(--ink)" fillRule="evenodd" pointerEvents="none" />
-                  {entry.bridges.map((b) => (
-                    <polygon
-                      key={b.key}
-                      points={b.rect.map(([x, y]) => `${x},${y}`).join(' ')}
-                      className={b.manual ? 'bridge manual' : 'bridge'}
-                      data-bridge={b.key}
-                      data-bridge-el={entry.id}
-                    />
-                  ))}
-                  {entry.tinyHoles.map((th, i) => (
-                    <circle key={i} cx={th.center[0]} cy={th.center[1]} r={px(9)} className="tiny-hole" pointerEvents="none" />
-                  ))}
-                </g>
+              {/* the true production shape: everything welded, then bridged */}
+              <path d={multiToD(fin.geometry)} fill="var(--ink)" fillRule="evenodd" pointerEvents="none" />
+              {fin.bridges.map((b) => (
+                <polygon
+                  key={b.key}
+                  points={b.rect.map(([x, y]) => `${x},${y}`).join(' ')}
+                  className={b.manual ? 'bridge manual' : 'bridge'}
+                  data-bridge={b.key}
+                />
+              ))}
+              {fin.tinyHoles.map((th, i) => (
+                <circle key={i} cx={th.center[0]} cy={th.center[1]} r={px(9)} className="tiny-hole" pointerEvents="none" />
               ))}
             </g>
           )}
@@ -385,7 +391,14 @@ function TextView({ el, selected, px }: { el: TextEl; selected: boolean; px: (n:
     )
   }
   const r = renderTextEl(el, shaped)
-  if (!r) return null
+  if (!r) {
+    // empty / whitespace-only text still needs to be visible and selectable
+    return (
+      <g>
+        <rect x={el.x - 25} y={el.y - 6} width={50} height={12} className="placeholder" data-elid={el.id} style={{ cursor: 'move' }} />
+      </g>
+    )
+  }
   const pad = 2
   const bb = r.bboxMm
   return (

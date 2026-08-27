@@ -86,7 +86,9 @@ export interface Run {
 
 export function splitRuns(text: string): { runs: Run[]; paraRtl: boolean } {
   const chars = [...text]
-  const classes = chars.map((ch) => (isArabic(ch) ? 'R' : isLatin(ch) ? 'L' : isDigit(ch) ? 'D' : 'N'))
+  // digits FIRST: Arabic-Indic digits live inside the Arabic block but numbers
+  // always render left-to-right, so they must never join an RTL run
+  const classes = chars.map((ch) => (isDigit(ch) ? 'D' : isArabic(ch) ? 'R' : isLatin(ch) ? 'L' : 'N'))
   const firstStrong = classes.find((c) => c === 'R' || c === 'L')
   const paraRtl = firstStrong === 'R'
 

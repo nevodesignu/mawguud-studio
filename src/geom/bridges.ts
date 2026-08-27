@@ -83,18 +83,19 @@ export function addBridges(
   const outGeometry: MultiPoly = []
   const allBridges: Bridge[] = []
 
-  let originX = Infinity
-  let originY = Infinity
-  for (const poly of mp) for (const [x, y] of poly[0] ?? []) {
-    if (x < originX) originX = x
-    if (y < originY) originY = y
-  }
-  if (!isFinite(originX)) return { geometry: mp, bridges: [], warnings, tinyHoles }
-
   for (const poly of mp) {
     let current: MultiPoly = [poly]
     const exterior = poly[0]
     const holes = poly.slice(1)
+    // key holes relative to their own welded island so overrides survive moving
+    // other elements, and moving the island itself keeps them too
+    let originX = Infinity
+    let originY = Infinity
+    for (const [x, y] of exterior ?? []) {
+      if (x < originX) originX = x
+      if (y < originY) originY = y
+    }
+    if (!isFinite(originX)) continue
 
     const big = holes
       .filter((h) => {

@@ -3,7 +3,6 @@ import type { Design } from '../model'
 import type { FinalizeResult } from '../store/studio'
 import type { MultiPoly } from '../geom/types'
 import { roundedRectRing, circleRing, multiToD, barRing } from '../geom/poly'
-import { weld } from '../geom/weld'
 import { buildAiPdf, type AiDocInput } from '../export/pdf'
 import { buildProductionSvg, saveBlob } from '../export/svg'
 import { shapedAsync } from '../shaping/service'
@@ -28,17 +27,21 @@ export function cutLinesOf(design: Design): MultiPoly {
 }
 
 export function productionDoc(design: Design, fin: FinalizeResult): AiDocInput {
+  // fin.geometry is already the true production shape (welded THEN bridged) -
+  // no boolean work may happen after bridging or tabs could be sealed shut
   return {
     wMm: design.sign.w,
     hMm: design.sign.h,
     cutLines: cutLinesOf(design),
-    shapes: weld(fin.els.map((e) => e.geometry)),
+    shapes: fin.geometry,
   }
 }
 
+const fmtCm = (mm: number) => String(Math.round(mm) / 10)
+
 export function exportFilename(design: Design, ext: string): string {
   const base = design.name.replace(/[\\/:*?"<>|]+/g, '').trim().replace(/\s+/g, '-') || 'sign'
-  return `${base}-${(design.sign.w / 10).toFixed(0)}x${(design.sign.h / 10).toFixed(0)}cm.${ext}`
+  return `${base}-${fmtCm(design.sign.w)}x${fmtCm(design.sign.h)}cm.${ext}`
 }
 
 export function downloadAi(design: Design, fin: FinalizeResult): void {
@@ -57,6 +60,15 @@ export function downloadProductionSvg(design: Design, fin: FinalizeResult): void
 
 /** Phase-1 client preview: clean black & white, no bridges. */
 export async function downloadClientPng(design: Design): Promise<void> {
+  try {
+    await clientPngInner(design)
+  } catch (err) {
+    console.error(err)
+    alert('Client preview export failed: ' + (err instanceof Error ? err.message : String(err)))
+  }
+}
+
+async function clientPngInner(design: Design): Promise<void> {
   const { sign } = design
   const parts: string[] = []
   for (const el of design.elements) {
@@ -94,8 +106,7 @@ export async function downloadClientPng(design: Design): Promise<void> {
   ctx.fillRect(0, 0, pxW, pxH)
   ctx.drawImage(img, 0, 0, pxW, pxH)
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-  if (blob) {
-    const bytes = new Uint8Array(await blob.arrayBuffer())
-    saveBlob(bytes, exportFilename(design, 'png'), 'image/png')
-  }
+  if (!blob) throw new Error('the browser could not encode the PNG')
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  saveBlob(bytes, exportFilename(design, 'png'), 'image/png')
 }

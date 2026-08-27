@@ -22,7 +22,13 @@ export default function App() {
       st.setFonts([...builtinFonts.map(({ url: _url, ...meta }) => meta), ...uploaded])
       await st.refreshDesigns()
     })()
-    return off
+    // best-effort flush of the debounced autosave when the tab closes
+    const onUnload = () => void useStudio.getState().flushSave()
+    window.addEventListener('beforeunload', onUnload)
+    return () => {
+      off()
+      window.removeEventListener('beforeunload', onUnload)
+    }
   }, [])
 
   return (
