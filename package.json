@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "smoke": "tsx scripts/smoke-export.ts"
+    "smoke": "tsx scripts/smoke-export.ts",
+    "layout-tests": "tsx scripts/layout-tests.ts"
   },
   "dependencies": {
     "harfbuzzjs": "^0.4.6",

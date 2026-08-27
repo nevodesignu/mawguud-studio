@@ -1,11 +1,12 @@
-// The layout brain behind "Perfect it" and the Sign Bot.
+﻿// The layout brain behind "Perfect it" and the Sign Bot.
 //
-// PHILOSOPHY: read the designer's intent, then make it crisp. The user's
-// sizes are kept (heights only shrink when something doesn't fit - never
-// grow). The divider stays where the user put it (snapped to exact center
-// only when it is already close). What gets perfected: exact centering in
-// each region, even stack spacing, equalizing lines that were clearly meant
-// to be the same size, and clamping overflow. Deterministic and idempotent.
+// PHILOSOPHY: the user's intent is WHAT goes WHERE (which side of the divider,
+// line order, deliberate size differences). The engine's job is the COMPOSITION:
+// the ensemble of text blocks + divider is assembled with even breathing room
+// and centered on the board - horizontally AND vertically - like a hand-built
+// production file. Sizes only shrink to fit, never grow; heights within 15% of
+// each other equalize (accidental drift was clearly meant to be equal).
+// Deterministic and idempotent.
 import type { Design, TextEl, DividerEl } from '../model'
 import { shapedAsync } from '../shaping/service'
 
@@ -16,9 +17,8 @@ interface Measured {
   aspect: number // ink width / ink height
 }
 
-const GAP_FACTOR = 0.45 // line gap as a fraction of the mean line height
-const SNAP_CENTER = 0.05 // divider within 5% of center means "I meant center"
-const EQUALIZE = 1.15 // heights within 15% of each other were meant to match
+const GAP_FACTOR = 0.45 // line gap inside a stack, fraction of mean line height
+const EQUALIZE = 1.15 // heights within 15% were meant to match
 
 async function measure(el: TextEl): Promise<Measured> {
   try {
@@ -32,71 +32,52 @@ async function measure(el: TextEl): Promise<Measured> {
 }
 
 const r1 = (v: number) => Math.round(v * 10) / 10
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
-interface Group {
-  lines: Measured[]
-  boxL: number
-  boxT: number
-  boxR: number
-  boxB: number
+/** Stack metrics for a set of lines at scale factor 1 (linear in s). */
+function stackHeight(heights: number[]): number {
+  if (heights.length === 0) return 0
+  const mean = heights.reduce((a, b) => a + b, 0) / heights.length
+  return heights.reduce((a, b) => a + b, 0) + GAP_FACTOR * mean * (heights.length - 1)
 }
 
 /**
- * Perfect all groups while respecting intent:
- * - shared shrink factor s <= 1: sizes are the user's, we only shrink to fit
- * - lines whose heights are within EQUALIZE of each other snap to one height
- *   (small accidental differences were clearly meant to be equal)
- * - every stack is centered in its region with even gaps
+ * Equalize near-equal heights across the whole design (snap clusters to their
+ * minimum), then round to the 0.1mm grid BEFORE any width/position math - so a
+ * second "Perfect it" computes from exactly the stored values and changes nothing.
  */
-function planGroups(groups: Group[], patches: Record<string, ElPatch>): void {
-  const active = groups.filter((g) => g.lines.length > 0)
-  if (active.length === 0) return
-
-  let s = 1
-  for (const g of active) {
-    const cw = g.boxR - g.boxL
-    const budget = g.boxB - g.boxT
-    const hs = g.lines.map((m) => Math.max(1, m.el.heightMm))
-    const sumH = hs.reduce((a, b) => a + b, 0)
-    const meanH = sumH / hs.length
-    // the stack must fit its region height...
-    s = Math.min(s, budget / (sumH + GAP_FACTOR * meanH * (g.lines.length - 1)))
-    // ...and every line must fit its region width
-    g.lines.forEach((m, i) => {
-      s = Math.min(s, cw / m.aspect / hs[i])
-    })
-  }
-
-  // heights after the fit-shrink
-  const all = active.flatMap((g) => g.lines)
-  const height = new Map<string, number>(all.map((m) => [m.el.id, Math.max(1, m.el.heightMm) * s]))
-
-  // equalize clusters: sort by height, walk, snap near-equal lines to the
-  // cluster minimum (minimum keeps every fit guarantee intact)
-  const sorted = [...all].sort((a, b) => height.get(a.el.id)! - height.get(b.el.id)!)
-  let clusterStart = 0
+function equalized(all: Measured[], scaled: Map<string, number>): Map<string, number> {
+  const sorted = [...all].sort((a, b) => scaled.get(a.el.id)! - scaled.get(b.el.id)!)
+  let start = 0
   for (let i = 1; i <= sorted.length; i++) {
-    const startH = height.get(sorted[clusterStart].el.id)!
-    if (i === sorted.length || height.get(sorted[i].el.id)! > startH * EQUALIZE) {
-      for (let j = clusterStart; j < i; j++) height.set(sorted[j].el.id, startH)
-      clusterStart = i
+    const startH = scaled.get(sorted[start].el.id)!
+    if (i === sorted.length || scaled.get(sorted[i].el.id)! > startH * EQUALIZE) {
+      for (let j = start; j < i; j++) scaled.set(sorted[j].el.id, startH)
+      start = i
     }
   }
-
-  for (const g of active) {
-    const heights = g.lines.map((m) => height.get(m.el.id)!)
-    const meanH = heights.reduce((a, b) => a + b, 0) / heights.length
-    const gap = GAP_FACTOR * meanH
-    const total = heights.reduce((a, b) => a + b, 0) + gap * (g.lines.length - 1)
-    let y = (g.boxT + g.boxB) / 2 - total / 2
-    const cx = (g.boxL + g.boxR) / 2
-    g.lines.forEach((m, i) => {
-      patches[m.el.id] = { x: r1(cx), y: r1(y + heights[i] / 2), heightMm: r1(heights[i]) }
-      y += heights[i] + gap
-    })
-  }
+  for (const [id, v] of scaled) scaled.set(id, r1(v))
+  return scaled
 }
+
+/** A shrink gets 0.2% headroom so re-running sees the layout as already fitting. */
+const settle = (s: number) => (s < 1 ? s * 0.998 : 1)
+
+/** Place one stack of lines centered at (cx, cy). */
+function placeStack(lines: Measured[], heights: Map<string, number>, cx: number, cy: number, patches: Record<string, ElPatch>): void {
+  if (lines.length === 0) return
+  const hs = lines.map((m) => heights.get(m.el.id)!)
+  const mean = hs.reduce((a, b) => a + b, 0) / hs.length
+  const gap = GAP_FACTOR * mean
+  const total = hs.reduce((a, b) => a + b, 0) + gap * (lines.length - 1)
+  let y = cy - total / 2
+  lines.forEach((m, i) => {
+    patches[m.el.id] = { x: r1(cx), y: r1(y + hs[i] / 2), heightMm: r1(hs[i]) }
+    y += hs[i] + gap
+  })
+}
+
+const blockWidth = (lines: Measured[], heights: Map<string, number>) =>
+  lines.length ? Math.max(...lines.map((m) => m.aspect * heights.get(m.el.id)!)) : 0
 
 /** Compute perfect-layout patches for every element (keyed by element id). */
 export async function arrangeDesign(design: Design): Promise<Record<string, ElPatch>> {
@@ -110,42 +91,79 @@ export async function arrangeDesign(design: Design): Promise<Record<string, ElPa
   const padX = Math.max(0.08 * w, 12)
   const padY = Math.max(0.08 * h, 12)
   const div = dividers[0]
+  const base = new Map<string, number>(measured.map((m) => [m.el.id, Math.max(1, m.el.heightMm)]))
 
   if (div && div.vertical) {
-    // Left | Right - the divider stays where the user put it (their own
-    // templates use off-center dividers when one side holds the longer name)
-    const divX = Math.abs(div.x - w / 2) < SNAP_CENTER * w ? w / 2 : clamp(div.x, 0.2 * w, 0.8 * w)
-    const divY = Math.abs(div.y - h / 2) < SNAP_CENTER * h ? h / 2 : clamp(div.y, 0.2 * h, 0.8 * h)
-    patches[div.id] = { x: r1(divX), y: r1(divY), vertical: true, length: r1(Math.min(div.length, 0.9 * h)) }
-    const gap = 0.045 * w
-    const left = measured.filter((m) => m.el.x < divX).sort(byY)
-    const right = measured.filter((m) => m.el.x >= divX).sort(byY)
-    planGroups(
-      [
-        { lines: right, boxL: divX + gap, boxT: padY, boxR: w - padX, boxB: h - padY },
-        { lines: left, boxL: padX, boxT: padY, boxR: divX - gap, boxB: h - padY },
-      ],
-      patches,
-    )
+    // ---- Left | Right ----
+    // Ensemble: [left block] gap [divider] gap [right block], centered on the
+    // board. The divider lands between the blocks - wider names push it off
+    // geometric center exactly like Mawguud's hand-made files.
+    const right = measured.filter((m) => m.el.x >= div.x).sort(byY)
+    const left = measured.filter((m) => m.el.x < div.x).sort(byY)
+    const g = 0.055 * w
+    const availW = w - 2 * padX
+    const availH = h - 2 * padY
+
+    let s = 1
+    for (const lines of [right, left]) {
+      if (!lines.length) continue
+      s = Math.min(s, availH / stackHeight(lines.map((m) => base.get(m.el.id)!)))
+    }
+    const widthAt1 = blockWidth(right, base) + blockWidth(left, base)
+    const gapsW = (right.length ? g : 0) + (left.length ? g : 0) + div.thickness
+    if (widthAt1 > 0) s = Math.min(s, (availW - gapsW) / widthAt1)
+
+    const heights = equalized(measured, new Map([...base].map(([id, v]) => [id, v * settle(s)])))
+    const wR = blockWidth(right, heights)
+    const wL = blockWidth(left, heights)
+    const total = wL + (left.length ? g : 0) + div.thickness + (right.length ? g : 0) + wR
+    const x0 = (w - total) / 2
+    const cxL = x0 + wL / 2
+    const divX = x0 + wL + (left.length ? g : 0) + div.thickness / 2
+    const cxR = x0 + wL + (left.length ? g : 0) + div.thickness + (right.length ? g : 0) + wR / 2
+
+    patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(0.64 * h) }
+    placeStack(right, heights, cxR, h / 2, patches)
+    placeStack(left, heights, cxL, h / 2, patches)
   } else if (div) {
-    // Up | Down (wide) and Vertical (tall): divider height is the user's call,
-    // snapped to exact middle only when they clearly meant the middle
-    const divY = Math.abs(div.y - h / 2) < SNAP_CENTER * h ? h / 2 : clamp(div.y, 0.15 * h, 0.85 * h)
-    const divX = Math.abs(div.x - w / 2) < SNAP_CENTER * w ? w / 2 : clamp(div.x, 0.2 * w, 0.8 * w)
-    patches[div.id] = { x: r1(divX), y: r1(divY), vertical: false, length: r1(Math.min(div.length, 0.92 * w)) }
-    const gap = 0.05 * h
-    const top = measured.filter((m) => m.el.y < divY).sort(byY)
-    const bottom = measured.filter((m) => m.el.y >= divY).sort(byY)
-    planGroups(
-      [
-        { lines: top, boxL: padX, boxT: padY, boxR: w - padX, boxB: divY - gap },
-        { lines: bottom, boxL: padX, boxT: divY + gap, boxR: w - padX, boxB: h - padY },
-      ],
-      patches,
-    )
+    // ---- Up | Down (wide) and Vertical (tall) ----
+    // Same principle, vertically: [top block] gap [divider] gap [bottom block]
+    // centered on the board; everything on the horizontal centerline.
+    const top = measured.filter((m) => m.el.y < div.y).sort(byY)
+    const bottom = measured.filter((m) => m.el.y >= div.y).sort(byY)
+    const g = 0.06 * h
+    const availW = w - 2 * padX
+    const availH = h - 2 * padY
+
+    let s = 1
+    const heightAt1 = stackHeight(top.map((m) => base.get(m.el.id)!)) + stackHeight(bottom.map((m) => base.get(m.el.id)!))
+    const gapsH = (top.length ? g : 0) + (bottom.length ? g : 0) + div.thickness
+    if (heightAt1 > 0) s = Math.min(s, (availH - gapsH) / heightAt1)
+    for (const m of measured) s = Math.min(s, availW / m.aspect / base.get(m.el.id)!)
+
+    const heights = equalized(measured, new Map([...base].map(([id, v]) => [id, v * settle(s)])))
+    const hT = stackHeight(top.map((m) => heights.get(m.el.id)!))
+    const hB = stackHeight(bottom.map((m) => heights.get(m.el.id)!))
+    const total = hT + (top.length ? g : 0) + div.thickness + (bottom.length ? g : 0) + hB
+    const y0 = (h - total) / 2
+    const cyT = y0 + hT / 2
+    const divY = y0 + hT + (top.length ? g : 0) + div.thickness / 2
+    const cyB = y0 + hT + (top.length ? g : 0) + div.thickness + (bottom.length ? g : 0) + hB / 2
+
+    patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1((h > w ? 0.64 : 0.66) * w) }
+    placeStack(top, heights, w / 2, cyT, patches)
+    placeStack(bottom, heights, w / 2, cyB, patches)
   } else {
-    // no divider: one centered stack
-    planGroups([{ lines: measured.sort(byY), boxL: padX, boxT: padY, boxR: w - padX, boxB: h - padY }], patches)
+    // ---- no divider: one centered stack ----
+    const lines = [...measured].sort(byY)
+    const availW = w - 2 * padX
+    const availH = h - 2 * padY
+    let s = 1
+    const hAt1 = stackHeight(lines.map((m) => base.get(m.el.id)!))
+    if (hAt1 > 0) s = Math.min(s, availH / hAt1)
+    for (const m of lines) s = Math.min(s, availW / m.aspect / base.get(m.el.id)!)
+    const heights = equalized(measured, new Map([...base].map(([id, v]) => [id, v * settle(s)])))
+    placeStack(lines, heights, w / 2, h / 2, patches)
   }
   return patches
 }

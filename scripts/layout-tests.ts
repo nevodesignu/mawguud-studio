@@ -1,0 +1,196 @@
+// Layout engine test battery: runs arrangeDesign against a corpus of real-world
+// sign texts (Arabic names, titles, digits, English, multi-line, one-sided) on
+// several board sizes, and asserts hard invariants on every result:
+//   1. everything stays inside the board
+//   2. the whole composition (text + divider) is centered on the board
+//   3. text never collides with the divider
+//   4. running arrange twice changes nothing (idempotence)
+// Run: npm run layout-tests
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+import { initHB } from '../src/shaping/engine'
+import { setFontDataProvider } from '../src/fonts/catalog'
+import { shapedAsync } from '../src/shaping/service'
+import { arrangeDesign } from '../src/layout/arrange'
+import { makeDesign, botElements, signFromSpec, type TemplateSpec, type Design, type TextEl, type Layout } from '../src/model'
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+const FONT_FILES: Record<string, string> = {
+  'amiri-bold': 'public/fonts/Amiri-Bold.ttf',
+  'tajawal-bold': 'public/fonts/Tajawal-Bold.ttf',
+  'almarai-bold': 'public/fonts/Almarai-Bold.ttf',
+  'poppins-bold': 'public/fonts/Poppins-Bold.ttf',
+}
+
+const spec = (layout: Layout, w: number, h: number): TemplateSpec => ({
+  finish: 'lighted',
+  layout,
+  w,
+  h,
+  boltDia: 13.4,
+  boltInsetX: 32.8,
+  boltInsetY: 32.8,
+  boltPattern: 'corners',
+  divThick: 2.85,
+})
+
+interface Case {
+  name: string
+  layout: Layout
+  groups: string[][]
+}
+
+const CASES: Case[] = [
+  { name: 'classic LR', layout: 'leftright', groups: [['أ / محروس', 'عبد الحميد'], ['منيل', 'جويدة']] },
+  { name: 'long name right', layout: 'leftright', groups: [['المهندس محمد عبد الرحمن الطويل'], ['فيلا', '125']] },
+  { name: 'doctor short', layout: 'leftright', groups: [['د / سارة'], ['شقة', '12']] },
+  { name: 'english LR', layout: 'leftright', groups: [['Eng. Mohamed Hassan'], ['Villa', '7']] },
+  { name: 'empty left', layout: 'leftright', groups: [['أ.د / عبد العزيز', 'الشربيني'], []] },
+  { name: 'empty right', layout: 'leftright', groups: [[], ['50']] },
+  { name: 'single chars', layout: 'leftright', groups: [['م'], ['٥']] },
+  { name: 'family + building', layout: 'leftright', groups: [['عائلة السيد أحمد', 'وأولاده'], ['عمارة', '٣٤']] },
+  { name: 'mixed digits LR', layout: 'leftright', groups: [['فيلا 50'], ['م / أحمد']] },
+  { name: 'three lines right', layout: 'leftright', groups: [['الأستاذ الدكتور', 'محمد علي', 'استشاري قلب'], ['عيادة', '٣']] },
+  { name: 'classic UD', layout: 'updown', groups: [['34'], ['المهندس عبيد محمد']] },
+  { name: 'english UD', layout: 'updown', groups: [['Villa 3'], ['Khaled Elwany']] },
+  { name: 'arabic digits UD', layout: 'updown', groups: [['١٢٥'], ['عائلة الدرويش الكريمة جدا']] },
+  { name: 'dr UD', layout: 'updown', groups: [['7'], ['Dr. Ahmed Hassan']] },
+  { name: 'two-line bottom UD', layout: 'updown', groups: [['12'], ['المهندس أحمد', 'عبد الفتاح']] },
+  { name: 'no top UD', layout: 'updown', groups: [[], ['عائلة المهندس']] },
+  { name: 'vertical door', layout: 'vertical', groups: [['12'], ['السيد']] },
+  { name: 'vertical family', layout: 'vertical', groups: [['٩'], ['عائلة', 'المهندس أحمد']] },
+  { name: 'vertical english', layout: 'vertical', groups: [['21'], ['Office', 'Dr. Mona']] },
+]
+
+const BOARDS: Record<Layout, [number, number][]> = {
+  leftright: [
+    [400, 250],
+    [700, 400],
+    [300, 150],
+  ],
+  updown: [
+    [400, 250],
+    [700, 400],
+    [300, 150],
+  ],
+  vertical: [
+    [250, 400],
+    [150, 300],
+    [400, 700],
+  ],
+}
+
+interface PlacedText {
+  el: TextEl
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+async function placed(design: Design): Promise<{ texts: PlacedText[]; div: { x: number; y: number; vertical: boolean; length: number; thickness: number } | null }> {
+  const texts: PlacedText[] = []
+  for (const el of design.elements) {
+    if (el.kind !== 'text' || !el.text.trim()) continue
+    const shaped = await shapedAsync(el.fontId, el.text, el.spacingEm)
+    const iw = shaped.bbox.maxX - shaped.bbox.minX
+    const ih = shaped.bbox.maxY - shaped.bbox.minY
+    const wMm = (iw / ih) * el.heightMm
+    texts.push({ el, left: el.x - wMm / 2, right: el.x + wMm / 2, top: el.y - el.heightMm / 2, bottom: el.y + el.heightMm / 2 })
+  }
+  const d = design.elements.find((e) => e.kind === 'divider')
+  return { texts, div: d && d.kind === 'divider' ? d : null }
+}
+
+let failures = 0
+let checks = 0
+
+function assert(cond: boolean, label: string, detail: string) {
+  checks++
+  if (!cond) {
+    failures++
+    console.log(`  FAIL ${label}: ${detail}`)
+  }
+}
+
+async function runCase(c: Case, w: number, h: number) {
+  const sp = spec(c.layout, w, h)
+  const design = makeDesign(`${c.name} ${w}x${h}`, signFromSpec(sp), botElements(sp, c.groups))
+  const apply = async () => {
+    const patches = await arrangeDesign(design)
+    for (const el of design.elements) {
+      const p = patches[el.id]
+      if (p) Object.assign(el, p)
+    }
+    return patches
+  }
+  const first = await apply()
+  const { texts, div } = await placed(design)
+
+  const label = `${c.name} @${w}x${h}`
+  // 1. containment
+  for (const t of texts) {
+    assert(t.left >= 1 && t.right <= w - 1, label, `"${t.el.text}" overflows horizontally (${t.left.toFixed(1)}..${t.right.toFixed(1)} on ${w})`)
+    assert(t.top >= 1 && t.bottom <= h - 1, label, `"${t.el.text}" overflows vertically (${t.top.toFixed(1)}..${t.bottom.toFixed(1)} on ${h})`)
+  }
+  if (div) {
+    const dl = div.vertical ? div.x - div.thickness / 2 : div.x - div.length / 2
+    const dr = div.vertical ? div.x + div.thickness / 2 : div.x + div.length / 2
+    const dt = div.vertical ? div.y - div.length / 2 : div.y - div.thickness / 2
+    const db = div.vertical ? div.y + div.length / 2 : div.y + div.thickness / 2
+    assert(dl >= 0 && dr <= w && dt >= 0 && db <= h, label, `divider out of board`)
+    // 3. no text/divider collision
+    for (const t of texts) {
+      const overlapX = Math.min(t.right, dr) - Math.max(t.left, dl)
+      const overlapY = Math.min(t.bottom, db) - Math.max(t.top, dt)
+      assert(!(overlapX > 0.5 && overlapY > 0.5), label, `"${t.el.text}" collides with divider`)
+    }
+  }
+  // 2. whole-composition centering
+  if (texts.length) {
+    const allL = Math.min(...texts.map((t) => t.left), div ? (div.vertical ? div.x - div.thickness / 2 : div.x - div.length / 2) : Infinity)
+    const allR = Math.max(...texts.map((t) => t.right), div ? (div.vertical ? div.x + div.thickness / 2 : div.x + div.length / 2) : -Infinity)
+    const allT = Math.min(...texts.map((t) => t.top), div ? (div.vertical ? div.y - div.length / 2 : div.y - div.thickness / 2) : Infinity)
+    const allB = Math.max(...texts.map((t) => t.bottom), div ? (div.vertical ? div.y + div.length / 2 : div.y + div.thickness / 2) : -Infinity)
+    const cx = (allL + allR) / 2
+    const cy = (allT + allB) / 2
+    assert(Math.abs(cx - w / 2) <= 0.8, label, `composition off-center horizontally: ${cx.toFixed(1)} vs ${(w / 2).toFixed(1)}`)
+    assert(Math.abs(cy - h / 2) <= 0.8, label, `composition off-center vertically: ${cy.toFixed(1)} vs ${(h / 2).toFixed(1)}`)
+  }
+  // 4. idempotence
+  const second = await apply()
+  for (const id of Object.keys(second)) {
+    const a = first[id]
+    const b = second[id]
+    if (!a || !b) continue
+    for (const k of ['x', 'y', 'heightMm', 'length'] as const) {
+      if (a[k] !== undefined && b[k] !== undefined) {
+        assert(Math.abs((a[k] as number) - (b[k] as number)) <= 0.2, label, `not idempotent: ${k} ${a[k]} -> ${b[k]}`)
+      }
+    }
+  }
+}
+
+async function main() {
+  await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
+  setFontDataProvider(async (id) => {
+    const file = FONT_FILES[id]
+    if (!file) throw new Error(`no font file for ${id}`)
+    return readFileSync(join(root, file)).buffer as ArrayBuffer
+  })
+  for (const c of CASES) {
+    for (const [w, h] of BOARDS[c.layout]) {
+      await runCase(c, w, h)
+    }
+  }
+  console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
+  if (failures > 0) process.exit(1)
+  console.log('layout engine: ALL GREEN')
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})

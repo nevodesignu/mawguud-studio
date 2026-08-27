@@ -13,18 +13,26 @@ export const builtinFonts: (FontMeta & { url: string })[] = [
   { id: 'poppins-bold', name: 'Poppins Bold (Latin)', builtin: true, url: '/fonts/Poppins-Bold.ttf' },
 ]
 
-const fontStore = createStore('mawguud-fonts', 'fonts')
+// IndexedDB store is created lazily so this module can load in node (tests)
+let _store: ReturnType<typeof createStore> | null = null
+const fontStore = () => (_store ??= createStore('mawguud-fonts', 'fonts'))
 
 interface StoredFont {
   name: string
   data: ArrayBuffer
 }
 
+// Headless environments (the layout test battery) inject their own font loader
+let fontDataProvider: ((id: string) => Promise<ArrayBuffer>) | null = null
+export function setFontDataProvider(p: (id: string) => Promise<ArrayBuffer>): void {
+  fontDataProvider = p
+}
+
 export async function listUploadedFonts(): Promise<FontMeta[]> {
-  const ids = (await keys(fontStore)) as string[]
+  const ids = (await keys(fontStore())) as string[]
   const metas: FontMeta[] = []
   for (const id of ids) {
-    const rec = (await get<StoredFont>(id, fontStore))!
+    const rec = (await get<StoredFont>(id, fontStore()))!
     metas.push({ id, name: rec.name, builtin: false })
   }
   return metas.sort((a, b) => a.name.localeCompare(b.name))
@@ -34,22 +42,23 @@ export async function addUploadedFont(file: File): Promise<FontMeta> {
   const data = await file.arrayBuffer()
   const name = file.name.replace(/\.(ttf|otf)$/i, '')
   const id = `user-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`
-  await set(id, { name, data } satisfies StoredFont, fontStore)
+  await set(id, { name, data } satisfies StoredFont, fontStore())
   return { id, name, builtin: false }
 }
 
 export async function removeUploadedFont(id: string): Promise<void> {
-  await del(id, fontStore)
+  await del(id, fontStore())
 }
 
 export async function getFontData(id: string): Promise<ArrayBuffer> {
+  if (fontDataProvider) return fontDataProvider(id)
   const builtin = builtinFonts.find((f) => f.id === id)
   if (builtin) {
     const res = await fetch(builtin.url)
     if (!res.ok) throw new Error(`font fetch failed: ${builtin.url}`)
     return res.arrayBuffer()
   }
-  const rec = await get<StoredFont>(id, fontStore)
+  const rec = await get<StoredFont>(id, fontStore())
   if (!rec) throw new Error(`font not found: ${id}`)
   return rec.data
 }
