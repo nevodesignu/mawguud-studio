@@ -39,6 +39,7 @@ const mirror = (layout: Layout, w: number, h: number): TemplateSpec => ({
 const CASES: { name: string; spec: TemplateSpec; groups: string[][] }[] = [
   { name: 'golden', spec: mirror('leftright', 400, 200), groups: [['م/يحيي', 'اسلام'], ['شقة', '20']] },
   { name: 'villa-row', spec: mirror('updown', 400, 200), groups: [['Villa', '34'], ['المهندس عبيد محمد']] },
+  { name: 'villa-ar', spec: mirror('updown', 400, 200), groups: [['فيلا', '34'], ['المهندس عبيد محمد']] },
   { name: 'number-top', spec: mirror('updown', 400, 250), groups: [['34'], ['المهندس عبيد محمد']] },
   { name: 'one-row', spec: mirror('leftright', 300, 150), groups: [['223'], ['B']] },
 ]

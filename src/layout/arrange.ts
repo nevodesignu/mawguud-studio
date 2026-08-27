@@ -44,6 +44,7 @@ const WIDTH_FILL = 0.84 // canonical ensemble width target
 const HEIGHT_FILL = 0.78 // canonical ensemble height cap
 const DIV_GAP_X = 0.045 // gap between divider and each block, fraction of W
 const DIV_GAP_Y = 0.05 // for horizontal dividers, fraction of H
+const MAX_ROW_GAP = 0.12 // LAW 20: villa-row middle gap cap, fraction of W
 const LINE_CAP = 0.4
 const NUMBER_CAP = 0.24
 
@@ -417,15 +418,22 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
         cyB = divY + div.thickness / 2 + (bottom.length ? gapY : 0) + hB / 2
       }
 
-      const xL = (w - CW) / 2
-      const xR = (w + CW) / 2
+      // LAW 20: the label|number row huddles - a short pair is not flung to
+      // the board edges with a hole in the middle (owner: "sometimes we need
+      // to get the 34 and villa closer"). The middle gap is capped and the
+      // pair stays centered as a group.
       const leftM = labelRight ? num : other
       const rightM = labelRight ? other : num
-      patches[leftM.el.id] = { x: r1(xL + (leftM.aspect * H(leftM)) / 2), y: r1(cyRow), heightMm: r1(H(leftM)) }
-      patches[rightM.el.id] = { x: r1(xR - (rightM.aspect * H(rightM)) / 2), y: r1(cyRow), heightMm: r1(H(rightM)) }
+      const wLm = leftM.aspect * H(leftM)
+      const wRm = rightM.aspect * H(rightM)
+      const rowSpan = Math.min(CW, wLm + wRm + MAX_ROW_GAP * w)
+      const xL = (w - rowSpan) / 2
+      const xR = (w + rowSpan) / 2
+      patches[leftM.el.id] = { x: r1(xL + wLm / 2), y: r1(cyRow), heightMm: r1(H(leftM)) }
+      patches[rightM.el.id] = { x: r1(xR - wRm / 2), y: r1(cyRow), heightMm: r1(H(rightM)) }
       // the line runs exactly from the first letter to the last letter of the
       // widest adjacent content - never past it
-      const rowDivLen = clampDividerToBolts(design, w / 2, divY, false, div.thickness, Math.max(CW, blockWidth(bottom, H)))
+      const rowDivLen = clampDividerToBolts(design, w / 2, divY, false, div.thickness, Math.max(rowSpan, blockWidth(bottom, H)))
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(rowDivLen) }
       placeStack(bottom, H, w / 2, cyB, patches, stacks)
       rows.push([leftM.el.id, rightM.el.id])

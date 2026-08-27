@@ -451,6 +451,41 @@ async function law19DividerClear() {
   }
 }
 
+/**
+ * LAW 20: the villa row huddles (owner 2026-08-27: "sometimes we need to get
+ * the 34 and villa closer to each other"). A short label|number pair is not
+ * flung to the board edges - the middle gap is capped at 12% of board width
+ * (3-judge render panel, unanimous: the gap must read as a word-space, smaller
+ * than the flanking margins, so the pair groups by proximity) and the pair
+ * stays centered as a group. Long pairs still justify to the content width,
+ * and the number keeps its side.
+ */
+async function law20RowHuddle() {
+  const MAXGAP = 0.12
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('l20', signFromSpec(sp), botElements(sp, [['فيلا', '34'], ['المهندس عبيد محمد']]))
+  const patches = await arrangeDesign(design, { mode: 'canonical' })
+  for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  const label = 'LAW 20 فيلا/34'
+  const { texts } = await placed(design)
+  const num = texts.find((t) => t.el.text === '34')!
+  const lab = texts.find((t) => t.el.text === 'فيلا')!
+  // Arabic label keeps the right side, the number the left
+  assert(num.el.x < lab.el.x, label, `number/label sides flipped (num x=${num.el.x}, label x=${lab.el.x})`)
+  const gap = lab.left - num.right
+  assert(gap <= MAXGAP * sp.w + 1, label, `pair still flung apart: ${gap.toFixed(0)}mm gap (cap ${MAXGAP * sp.w}mm)`)
+  assert(gap >= 0.05 * sp.w, label, `pair crammed together: ${gap.toFixed(0)}mm gap`)
+  // the pair is centered as a group on the board
+  const mid = (num.left + lab.right) / 2
+  assert(Math.abs(mid - sp.w / 2) <= 0.015 * sp.w, label, `huddled pair off-center: ${mid.toFixed(1)} vs ${sp.w / 2}`)
+  // and the divider still spans the widest content (the name below), never less
+  const d = design.elements.find((e) => e.kind === 'divider')
+  const name = texts.find((t) => t.el.text.includes('المهندس'))!
+  if (d && d.kind === 'divider') {
+    assert(d.length >= name.right - name.left - 1, label, `divider shorter than the name below: ${d.length} vs ${(name.right - name.left).toFixed(0)}`)
+  }
+}
+
 /** LAW 17: "Ahmed Ali" in a narrow LR column splits into AHMED over ALI when bigger. */
 async function law17NameSplit() {
   const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 300, h: 150, boltDia: 6.5, boltInsetX: 15.3, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }
@@ -495,6 +530,7 @@ async function main() {
   await law17NameSplit()
   await law18NumberScale()
   await law19DividerClear()
+  await law20RowHuddle()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')
