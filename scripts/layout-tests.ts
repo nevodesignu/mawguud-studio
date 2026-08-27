@@ -236,7 +236,8 @@ async function nudgeKeep() {
     for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
   }
   await applyMode('canonical')
-  const line = design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'اسلام')!
+  // nudge the TOP line: far from any other axis, so law-14 unification stays out
+  const line = design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'م/يحيي')!
   const nudgedY = line.y - 5 // "a bit upward"
   line.y = nudgedY
   await applyMode('layout')
@@ -295,6 +296,24 @@ async function alignmentLaws() {
   assert(Math.abs(t(d2, 'Villa').y - t(d2, '34').y) < 0.11, 'LAW 13', `row split Y: ${t(d2, 'Villa').y} vs ${t(d2, '34').y}`)
 }
 
+/** LAW 14: near-aligned texts across the divider snap to exactly one axis. */
+async function law14CrossAxis() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 100, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('l14', signFromSpec(sp), botElements(sp, [['أحمد', 'محمود'], ['منى', 'سارة']]))
+  const t = (txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  // different user sizes so the ideal rows land NEAR each other but not equal
+  const patches0 = await arrangeDesign(design, { mode: 'canonical' })
+  for (const el of design.elements) Object.assign(el, patches0[el.id] ?? {})
+  t('منى').heightMm = 34
+  t('سارة').heightMm = 26
+  t('أحمد').heightMm = 30
+  t('محمود').heightMm = 30
+  const patches = await arrangeDesign(design, { mode: 'layout' })
+  for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  assert(Math.abs(t('أحمد').y - t('منى').y) < 0.11, 'LAW 14', `cross-divider rows not unified: ${t('أحمد').y} vs ${t('منى').y}`)
+  assert(Math.abs(t('محمود').y - t('سارة').y) < 0.11, 'LAW 14', `cross-divider rows not unified (2nd): ${t('محمود').y} vs ${t('سارة').y}`)
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -313,6 +332,7 @@ async function main() {
   await boltAxisLaw()
   await law11BigText()
   await alignmentLaws()
+  await law14CrossAxis()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')

@@ -109,12 +109,39 @@ function stackUnits(lines: Measured[]): number {
 
 const blockUnits = (lines: Measured[]) => (lines.length ? Math.max(...lines.map((m) => m.aspect * ratioOf(m))) : 0)
 
+/**
+ * LAW 14: two texts that land ALMOST on one axis - across the divider, across
+ * the whole board - snap to exactly the same axis. Almost-aligned looks weird.
+ */
+function unifyAxes(design: Design, patches: Record<string, ElPatch>): void {
+  const ids = design.elements.filter((e) => e.kind === 'text' && patches[e.id]).map((e) => e.id)
+  for (const axis of ['y', 'x'] as const) {
+    const items = ids
+      .map((id) => ({ id, v: patches[id][axis], hh: patches[id].heightMm ?? 20 }))
+      .filter((it): it is { id: string; v: number; hh: number } => it.v !== undefined)
+      .sort((a, b) => a.v - b.v)
+    let i = 0
+    while (i < items.length) {
+      let j = i
+      while (j + 1 < items.length && items[j + 1].v - items[j].v <= Math.max(5, 0.3 * Math.min(items[j].hh, items[j + 1].hh))) j++
+      if (j > i) {
+        const mean = r1(items.slice(i, j + 1).reduce((a, b) => a + b.v, 0) / (j - i + 1))
+        for (let k = i; k <= j; k++) patches[items[k].id][axis] = mean
+      }
+      i = j + 1
+    }
+  }
+}
+
 /** Compute perfect-layout patches for every element (keyed by element id). */
 export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Promise<Record<string, ElPatch>> {
   const mode: ArrangeMode = opts.mode ?? 'layout'
   const { w, h } = design.sign
   const { patches, stacks, rows } = await arrangeCore(design, mode)
-  if (mode !== 'layout') return patches
+  if (mode !== 'layout') {
+    unifyAxes(design, patches)
+    return patches
+  }
   // Understand the user's mind: an element sitting CLOSE to its ideal spot was
   // deliberately nudged there ("a bit upward, slightly to the side") - keep it.
   // An element far from ideal is asking to be placed properly. Alignment laws
@@ -155,6 +182,7 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
       if (p && p.y !== undefined) p.y = r1(p.y + shift)
     }
   }
+  unifyAxes(design, patches)
   return patches
 }
 
