@@ -13,8 +13,9 @@ interface DragState {
   startWX: number
   startWY: number
   groupStart?: Map<string, { x: number; y: number }>
-  startHeight?: number
-  startLength?: number
+  resizeStarts?: Map<string, { x: number; y: number; heightMm?: number; length?: number }>
+  centerX?: number
+  centerY?: number
   startDist?: number
   startPanX?: number
   startPanY?: number
@@ -209,18 +210,31 @@ export function Canvas() {
     }
 
     const handle = target.getAttribute('data-handle')
-    if (handle && s.selectedIds.length === 1) {
-      const el = s.design.elements.find((x) => x.id === s.selectedIds[0])
-      if (el) {
+    if (handle && s.selectedIds.length >= 1) {
+      // resize the whole selection proportionally around its combined centre
+      const sel = s.design.elements.filter((x) => s.selectedIds.includes(x.id))
+      if (sel.length) {
+        const boxes = sel.map(bboxOf)
+        const centerX = (Math.min(...boxes.map((b) => b.x)) + Math.max(...boxes.map((b) => b.x + b.w))) / 2
+        const centerY = (Math.min(...boxes.map((b) => b.y)) + Math.max(...boxes.map((b) => b.y + b.h))) / 2
+        const resizeStarts = new Map<string, { x: number; y: number; heightMm?: number; length?: number }>()
+        for (const el of sel) {
+          resizeStarts.set(el.id, {
+            x: el.x,
+            y: el.y,
+            heightMm: el.kind === 'text' ? el.heightMm : undefined,
+            length: el.kind === 'divider' ? el.length : undefined,
+          })
+        }
         s.beginGesture()
         dragRef.current = {
           kind: 'resize',
-          elId: el.id,
           startWX: wx,
           startWY: wy,
-          startHeight: el.kind === 'text' ? el.heightMm : undefined,
-          startLength: el.kind === 'divider' ? el.length : undefined,
-          startDist: Math.max(1e-3, Math.hypot(wx - el.x, wy - el.y)),
+          resizeStarts,
+          centerX,
+          centerY,
+          startDist: Math.max(1e-3, Math.hypot(wx - centerX, wy - centerY)),
         }
         return
       }
@@ -321,17 +335,24 @@ export function Canvas() {
       )
       return
     }
-    if (drag.kind === 'resize' && drag.elId) {
-      const el = s.design.elements.find((x) => x.id === drag.elId)
-      if (!el) return
-      const dist = Math.hypot(wx - el.x, wy - el.y)
-      const ratio = dist / drag.startDist!
+    if (drag.kind === 'resize' && drag.resizeStarts) {
+      const cx = drag.centerX!
+      const cy = drag.centerY!
+      const ratio = Math.min(50, Math.max(0.05, Math.hypot(wx - cx, wy - cy) / drag.startDist!))
       drag.moved = true
-      if (el.kind === 'text' && drag.startHeight) {
-        s.updateEl(el.id, { heightMm: Math.max(3, Math.round(drag.startHeight * ratio * 10) / 10) })
-      } else if (el.kind === 'divider' && drag.startLength) {
-        s.updateEl(el.id, { length: Math.max(5, Math.round(drag.startLength * ratio * 10) / 10) })
-      }
+      s.mutate(
+        (d) => {
+          for (const el of d.elements) {
+            const st = drag.resizeStarts!.get(el.id)
+            if (!st) continue
+            el.x = Math.round((cx + (st.x - cx) * ratio) * 10) / 10
+            el.y = Math.round((cy + (st.y - cy) * ratio) * 10) / 10
+            if (el.kind === 'text' && st.heightMm) el.heightMm = Math.max(3, Math.round(st.heightMm * ratio * 10) / 10)
+            if (el.kind === 'divider' && st.length) el.length = Math.max(5, Math.round(st.length * ratio * 10) / 10)
+          }
+        },
+        { history: false },
+      )
     }
   }
 
@@ -379,15 +400,6 @@ export function Canvas() {
         <g transform={`translate(${panX} ${panY}) scale(${zoom})`}>
           {/* artboard */}
           <path d={outlineD} className="artboard" fillRule="evenodd" />
-          <defs>
-            <pattern id="grid10" width="10" height="10" patternUnits="userSpaceOnUse">
-              <path d="M10 0H0V10" fill="none" stroke="var(--grid)" strokeWidth={px(1)} />
-            </pattern>
-            <clipPath id="boardClip">
-              <path d={outlineD} />
-            </clipPath>
-          </defs>
-          <rect x={0} y={0} width={sign.w} height={sign.h} fill="url(#grid10)" clipPath="url(#boardClip)" pointerEvents="none" />
           <path d={outlineD} fill="none" stroke={mode === 'finalize' ? '#e5484d' : 'var(--board-line)'} strokeWidth={px(1.4)} pointerEvents="none" />
           {holes.map((d, i) => (
             <path key={i} d={d} fill="none" stroke={mode === 'finalize' ? '#e5484d' : 'var(--board-line)'} strokeWidth={px(1.2)} pointerEvents="none" />
@@ -403,7 +415,10 @@ export function Canvas() {
                 ),
               )}
               {groupBox && (
-                <rect x={groupBox.x - 3} y={groupBox.y - 3} width={groupBox.w + 6} height={groupBox.h + 6} className="group-box" strokeWidth={px(1.2)} strokeDasharray={`${px(6)} ${px(4)}`} pointerEvents="none" />
+                <g>
+                  <rect x={groupBox.x - 3} y={groupBox.y - 3} width={groupBox.w + 6} height={groupBox.h + 6} className="group-box" strokeWidth={px(1.2)} strokeDasharray={`${px(6)} ${px(4)}`} pointerEvents="none" />
+                  <SelectionBox x={groupBox.x - 3} y={groupBox.y - 3} w={groupBox.w + 6} h={groupBox.h + 6} px={px} handles onlyHandles />
+                </g>
               )}
               {marquee && (
                 <rect x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} className="marquee" strokeWidth={px(1)} pointerEvents="none" />
@@ -454,7 +469,7 @@ export function Canvas() {
   )
 }
 
-function SelectionBox({ x, y, w, h, px, handles }: { x: number; y: number; w: number; h: number; px: (n: number) => number; handles: boolean }) {
+function SelectionBox({ x, y, w, h, px, handles, onlyHandles }: { x: number; y: number; w: number; h: number; px: (n: number) => number; handles: boolean; onlyHandles?: boolean }) {
   const hs = px(9)
   const corners: [number, number][] = [
     [x, y],
@@ -464,7 +479,7 @@ function SelectionBox({ x, y, w, h, px, handles }: { x: number; y: number; w: nu
   ]
   return (
     <g>
-      <rect x={x} y={y} width={w} height={h} className="selection" strokeWidth={px(1.4)} pointerEvents="none" />
+      {!onlyHandles && <rect x={x} y={y} width={w} height={h} className="selection" strokeWidth={px(1.4)} pointerEvents="none" />}
       {handles &&
         corners.map(([cx, cy], i) => (
           <rect key={i} x={cx - hs / 2} y={cy - hs / 2} width={hs} height={hs} className="handle" data-handle={String(i)} strokeWidth={px(1)} />

@@ -14,8 +14,8 @@ export interface AiStyle {
   shapeStrokeWidthMm: number
 }
 
-// #231F20 at 1pt - exactly what Mawguud's production templates use
-export const MAWGUUD_STYLE: AiStyle = { cutColor: [35, 31, 32], cutWidthMm: 0.353, shapeFill: [35, 31, 32], shapeStrokeWidthMm: 0.353 }
+// pure black at 1pt (the templates measured #231F20, but the boss says #000000)
+export const MAWGUUD_STYLE: AiStyle = { cutColor: [0, 0, 0], cutWidthMm: 0.353, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.353 }
 // hairline red cut-line convention used by many laser workflows
 export const REDLINE_STYLE: AiStyle = { cutColor: [255, 0, 0], cutWidthMm: 0.02, shapeFill: [0, 0, 0], shapeStrokeWidthMm: 0.02 }
 

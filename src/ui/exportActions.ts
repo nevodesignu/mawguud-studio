@@ -68,10 +68,10 @@ async function clientPngInner(design: Design): Promise<void> {
     if (el.kind === 'text') {
       const shaped = await shapedAsync(el.fontId, el.text, el.spacingEm)
       const r = renderTextEl(el, shaped)
-      if (r) parts.push(`<g transform="${r.transform}"><path d="${r.d}" fill="#0a0a0a"/></g>`)
+      if (r) parts.push(`<g transform="${r.transform}"><path d="${r.d}" fill="#000000"/></g>`)
     } else {
       const ring = barRing(el.x, el.y, el.length, el.thickness, el.vertical, el.roundCaps)
-      parts.push(`<path d="${multiToD([[ring]])}" fill="#0a0a0a"/>`)
+      parts.push(`<path d="${multiToD([[ring]])}" fill="#000000"/>`)
     }
   }
   const outline = multiToD([[roundedRectRing(0, 0, sign.w, sign.h, sign.radius)]])
