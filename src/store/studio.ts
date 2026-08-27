@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Design, El, TextEl, SignSpec, FinalizeSettings, TemplateSpec } from '../model'
 import { templateCatalog, makeFromSpec, makeBlank, makeDesign, normalizeDesign, uid, botElements, signFromSpec, specName } from '../model'
-import { arrangeDesign } from '../layout/arrange'
+import { arrangeDesign, optimizeNameSplits } from '../layout/arrange'
 import type { MultiPoly, Pt } from '../geom/types'
 import { bboxOfMulti } from '../geom/types'
 import type { Bridge } from '../geom/bridges'
@@ -430,7 +430,9 @@ export const useStudio = create<StudioState>((set, get) => ({
   },
   createFromBot: async (spec, groups) => {
     await get().flushSave()
-    startFresh(set, makeDesign(specName(spec), signFromSpec(spec), botElements(spec, groups)))
+    const seeded = makeDesign(specName(spec), signFromSpec(spec), botElements(spec, groups))
+    // LAW 17: split a long name into stacked lines when that makes it bigger
+    startFresh(set, await optimizeNameSplits(seeded))
     await get().autoArrange('canonical') // bot mode: the bot also sizes
     scheduleSave(get, set)
   },

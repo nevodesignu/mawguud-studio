@@ -15,7 +15,7 @@
 // one-row letter|number ("B | 223"), Up|Down stacks, and the catalog Villa row
 // (label left / number right on one line over a full-width divider).
 import type { Design, TextEl, DividerEl } from '../model'
-import { isNumberLine } from '../model'
+import { isNumberLine, uid } from '../model'
 import { shapedAsync } from '../shaping/service'
 
 export type ElPatch = Partial<Omit<TextEl, 'kind'>> & Partial<Omit<DividerEl, 'kind'>>
@@ -157,6 +157,50 @@ function unifySizes(design: Design): Map<string, number> {
     }
   }
   return unified
+}
+
+/**
+ * LAW 17: a multi-word name in a Left|Right column ALWAYS splits into stacked
+ * lines ("Ahmed Ali" -> AHMED over ALI) - the house style of every production
+ * LR file. The break point is chosen so the two lines balance. Used by the
+ * Sign Bot before canonical arranging.
+ */
+export async function optimizeNameSplits(design: Design): Promise<Design> {
+  const d: Design = JSON.parse(JSON.stringify(design))
+  const div = d.elements.find((e): e is DividerEl => e.kind === 'divider' && e.vertical)
+  if (!div) return d
+  const roleOf = (t: string) => (isNumberLine(t) ? 'number' : LABEL_RE.test(t.trim()) ? 'label' : 'name')
+
+  for (const side of ['right', 'left'] as const) {
+    const col = d.elements.filter((e): e is TextEl => e.kind === 'text' && (side === 'right' ? e.x >= div.x : e.x < div.x))
+    const names = col.filter((e) => roleOf(e.text) === 'name')
+    if (names.length !== 1) continue
+    const el = names[0]
+    const words = el.text.trim().split(/\s+/)
+    if (words.length < 2) continue
+
+    // best break: the two lines as balanced as possible
+    let best: { a: string; b: string; cost: number } | null = null
+    for (let i = 1; i < words.length; i++) {
+      const a = words.slice(0, i).join(' ')
+      const b = words.slice(i).join(' ')
+      try {
+        const [sa, sb] = await Promise.all([shapedAsync(el.fontId, a, el.spacingEm), shapedAsync(el.fontId, b, el.spacingEm)])
+        const wa = (sa.bbox.maxX - sa.bbox.minX) / (sa.refHeight || 1)
+        const wb = (sb.bbox.maxX - sb.bbox.minX) / (sb.refHeight || 1)
+        const cost = Math.max(wa, wb)
+        if (!best || cost < best.cost) best = { a, b, cost }
+      } catch {
+        /* unshapeable candidate - skip */
+      }
+    }
+    if (!best) continue
+
+    el.text = best.a
+    const second: TextEl = { ...JSON.parse(JSON.stringify(el)), id: uid(), text: best.b, y: el.y + Math.max(5, el.heightMm) }
+    d.elements.splice(d.elements.indexOf(el) + 1, 0, second)
+  }
+  return d
 }
 
 /** Compute perfect-layout patches for every element (keyed by element id). */

@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { initHB } from '../src/shaping/engine'
 import { setFontDataProvider } from '../src/fonts/catalog'
 import { shapedAsync } from '../src/shaping/service'
-import { arrangeDesign } from '../src/layout/arrange'
+import { arrangeDesign, optimizeNameSplits } from '../src/layout/arrange'
 import { makeDesign, botElements, signFromSpec, type TemplateSpec, type Design, type TextEl, type Layout } from '../src/model'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -350,6 +350,26 @@ async function law16ReadingDirection() {
   assert(t(d2, 'Ahmed').x < divX2 && t(d2, '30').x > divX2, 'LAW 16', `Latin name not on the left (name x=${t(d2, 'Ahmed').x}, div=${divX2})`)
 }
 
+/** LAW 17: "Ahmed Ali" in a narrow LR column splits into AHMED over ALI when bigger. */
+async function law17NameSplit() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 300, h: 150, boltDia: 6.5, boltInsetX: 15.3, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }
+  const base = makeDesign('l17', signFromSpec(sp), botElements(sp, [['Ahmed Ali'], ['Villa', '30']]))
+  const baseNameId = base.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'Ahmed Ali')!.id
+  const basePatches = await arrangeDesign(JSON.parse(JSON.stringify(base)), { mode: 'canonical' })
+  const singleH = basePatches[baseNameId]?.heightMm ?? 999
+  const optimized = await optimizeNameSplits(base)
+  const texts = optimized.elements.filter((e): e is TextEl => e.kind === 'text').map((e) => e.text)
+  assert(texts.includes('Ahmed') && texts.includes('Ali'), 'LAW 17', `name not split: ${texts.join(' | ')}`)
+  const patches = await arrangeDesign(optimized, { mode: 'canonical' })
+  const ahmed = optimized.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'Ahmed')!
+  const hSplit = patches[ahmed.id]?.heightMm ?? 0
+  assert(hSplit >= singleH - 0.11, 'LAW 17', `split made the name smaller: ${hSplit} vs single ${singleH}`)
+  // a column that already has two name lines is never split further
+  const two = makeDesign('l17b', signFromSpec(sp), botElements(sp, [['أ / محروس', 'عبد الحميد'], ['منيل', 'جويدة']]))
+  const untouched = await optimizeNameSplits(two)
+  assert(untouched.elements.filter((e) => e.kind === 'text').length === 4, 'LAW 17', 'already-stacked names were split again')
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -371,6 +391,7 @@ async function main() {
   await law14CrossAxis()
   await law15SiblingSizes()
   await law16ReadingDirection()
+  await law17NameSplit()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')
