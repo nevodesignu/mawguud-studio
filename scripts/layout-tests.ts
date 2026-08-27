@@ -170,7 +170,9 @@ async function runCase(c: Case, w: number, h: number) {
     // LAW 19: never touching a bolt circle either
     assertDividerClear(design, label, 1)
   }
-  // 2. whole-composition centering
+  // 2. centering. LAW 21 for a two-column LR sign: the DIVIDER sits dead
+  // center and each column centers in its own half, however unequal the
+  // columns. Everything else: whole-composition bbox centering.
   if (texts.length) {
     const allL = Math.min(...texts.map((t) => t.left), div ? (div.vertical ? div.x - div.thickness / 2 : div.x - div.length / 2) : Infinity)
     const allR = Math.max(...texts.map((t) => t.right), div ? (div.vertical ? div.x + div.thickness / 2 : div.x + div.length / 2) : -Infinity)
@@ -178,9 +180,21 @@ async function runCase(c: Case, w: number, h: number) {
     const allB = Math.max(...texts.map((t) => t.bottom), div ? (div.vertical ? div.y + div.length / 2 : div.y + div.thickness / 2) : -Infinity)
     const cx = (allL + allR) / 2
     const cy = (allT + allB) / 2
-    // ink descenders/hamzas shift the measured ink-center a little from the
-    // typographic center the engine aligns - allow ~1.5% of the board
-    assert(Math.abs(cx - w / 2) <= Math.max(0.8, 0.015 * w), label, `composition off-center horizontally: ${cx.toFixed(1)} vs ${(w / 2).toFixed(1)}`)
+    const vdiv = div && div.vertical ? div : null
+    const rightTexts = vdiv ? texts.filter((t) => t.el.x > vdiv.x) : []
+    const leftTexts = vdiv ? texts.filter((t) => t.el.x < vdiv.x) : []
+    if (vdiv && rightTexts.length && leftTexts.length) {
+      assert(Math.abs(vdiv.x - w / 2) <= 0.11, label, `LAW 21: divider off board center: ${vdiv.x} vs ${w / 2}`)
+      const cxHalf = (w / 2 - vdiv.thickness / 2) / 2
+      const lC = (Math.min(...leftTexts.map((t) => t.left)) + Math.max(...leftTexts.map((t) => t.right))) / 2
+      const rC = (Math.min(...rightTexts.map((t) => t.left)) + Math.max(...rightTexts.map((t) => t.right))) / 2
+      assert(Math.abs(lC - cxHalf) <= Math.max(1, 0.008 * w), label, `LAW 21: left column off half-center: ${lC.toFixed(1)} vs ${cxHalf.toFixed(1)}`)
+      assert(Math.abs(rC - (w - cxHalf)) <= Math.max(1, 0.008 * w), label, `LAW 21: right column off half-center: ${rC.toFixed(1)} vs ${(w - cxHalf).toFixed(1)}`)
+    } else {
+      // ink descenders/hamzas shift the measured ink-center a little from the
+      // typographic center the engine aligns - allow ~1.5% of the board
+      assert(Math.abs(cx - w / 2) <= Math.max(0.8, 0.015 * w), label, `composition off-center horizontally: ${cx.toFixed(1)} vs ${(w / 2).toFixed(1)}`)
+    }
     assert(Math.abs(cy - h / 2) <= Math.max(0.8, 0.02 * h), label, `composition off-center vertically: ${cy.toFixed(1)} vs ${(h / 2).toFixed(1)}`)
   }
   // 4. idempotence
@@ -222,6 +236,8 @@ async function goldenMaster() {
   const d = design.elements.find((e) => e.kind === 'divider')
   // content-matched divider follows the (now taller) name column
   if (d && d.kind === 'divider') near(d.length, 118.6, 2, 'divider length')
+  // LAW 21: dead center of the board
+  if (d && d.kind === 'divider') near(d.x, 200, 0.11, 'divider x (board center)')
 }
 
 /**
@@ -275,7 +291,8 @@ async function placementSovereignty() {
   assert(design.elements.every((e) => e.kind !== 'text' || !e.placed), label, 'bot output left placed flags set')
 
   // drag the bottom name line FAR off - way beyond any nudge threshold
-  const dropX = t('اسلام').x - 62
+  // (staying right of the center divider, so the column membership holds)
+  const dropX = t('اسلام').x - 40
   const dropY = t('اسلام').y + 28
   const partnerIdealDX = t('م/يحيي').x - t('اسلام').x
   const partnerIdealDY = t('م/يحيي').y - t('اسلام').y

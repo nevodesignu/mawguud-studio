@@ -394,9 +394,25 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     const [R, L] = cols
 
     const gapX = DIV_GAP_X * w
-    const unitsW = blockUnits(R) + blockUnits(L)
-    const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
-    let s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
+    const sidePad = ((1 - WIDTH_FILL) / 2) * w
+    // LAW 21: the divider sits at the CENTER of the sign (owner: "at the end
+    // of the day this part gotta be at the center") - each column centers in
+    // its own half, however unequal the columns are. A one-column sign keeps
+    // whole-composition centering instead.
+    const centerDiv = R.length > 0 && L.length > 0
+    let s = Infinity
+    if (centerDiv) {
+      // each column must FIT its half
+      const halfW = w / 2 - div.thickness / 2 - gapX - sidePad
+      for (const g of [R, L]) {
+        const u = blockUnits(g)
+        if (u > 0) s = Math.min(s, halfW / u)
+      }
+    } else {
+      const unitsW = blockUnits(R) + blockUnits(L)
+      const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
+      s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
+    }
     for (const g of [R, L]) {
       if (!g.length) continue
       s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
@@ -408,11 +424,22 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
 
     const wR = blockWidth(R, H)
     const wL = blockWidth(L, H)
-    const total = wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR
-    const x0 = (w - total) / 2
-    const cxL = x0 + wL / 2
-    const divX = x0 + wL + (L.length ? gapX : 0) + div.thickness / 2
-    const cxR = x0 + wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR / 2
+    let cxL: number
+    let divX: number
+    let cxR: number
+    if (centerDiv) {
+      // divider dead center; each column centered between the board edge and
+      // the divider (the half-fit cap above keeps the divider gap clear)
+      divX = w / 2
+      cxL = (w / 2 - div.thickness / 2) / 2
+      cxR = w - cxL
+    } else {
+      const total = wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR
+      const x0 = (w - total) / 2
+      cxL = x0 + wL / 2
+      divX = x0 + wL + (L.length ? gapX : 0) + div.thickness / 2
+      cxR = x0 + wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR / 2
+    }
 
     // the divider always tracks the content beside it (both modes)
     const divLen = clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
