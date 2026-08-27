@@ -233,8 +233,19 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
 
   if (div && div.vertical) {
     // ---- Left | Right ----
-    const right = measured.filter((m) => m.el.x >= div.x).sort(byY)
-    const left = measured.filter((m) => m.el.x < div.x).sort(byY)
+    let right = measured.filter((m) => m.el.x >= div.x).sort(byY)
+    let left = measured.filter((m) => m.el.x < div.x).sort(byY)
+
+    // LAW 16: the name column leads the reading direction - an Arabic name
+    // goes RIGHT (read first), a Latin name goes LEFT. Swap if backwards.
+    const nameish = (g: Measured[]) => g.some((m) => m.role === 'name')
+    if (right.length && left.length && nameish(right) !== nameish(left)) {
+      const nameCol = nameish(right) ? right : left
+      const otherCol = nameish(right) ? left : right
+      const nameGoesRight = nameCol.some((m) => hasArabic(m.el.text))
+      right = nameGoesRight ? nameCol : otherCol
+      left = nameGoesRight ? otherCol : nameCol
+    }
 
     // letter|number mode (canonical sizing only): equal size on one row
     const shortSingle = (g: Measured[]) => g.length === 1 && g[0].el.text.trim().length <= 4

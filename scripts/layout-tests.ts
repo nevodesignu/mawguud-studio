@@ -330,6 +330,26 @@ async function law15SiblingSizes() {
   assert(Math.abs(t('Villa').heightMm - 19.1) < 0.11, 'LAW 15', 'label size was touched')
 }
 
+/** LAW 16: the name column leads the reading direction (Arabic right, Latin left). */
+async function law16ReadingDirection() {
+  const sp: TemplateSpec = { finish: 'lighted', layout: 'leftright', w: 400, h: 250, boltDia: 13.4, boltInsetX: 32.8, boltInsetY: 32.8, boltPattern: 'corners', divThick: 2.85 }
+  const apply = async (design: Design) => {
+    const patches = await arrangeDesign(design, { mode: 'layout' })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  }
+  // Arabic sign built BACKWARDS (name on the left) must come out name-RIGHT
+  const d1 = makeDesign('l16a', signFromSpec(sp), botElements(sp, [['فيلا', '12'], ['احمد', 'العقاد']]))
+  await apply(d1)
+  const t = (design: Design, txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  const divX1 = d1.elements.find((e) => e.kind === 'divider')!.x
+  assert(t(d1, 'احمد').x > divX1 && t(d1, '12').x < divX1, 'LAW 16', `Arabic name not on the right (name x=${t(d1, 'احمد').x}, div=${divX1})`)
+  // Latin sign: name stays LEFT
+  const d2 = makeDesign('l16b', signFromSpec(sp), botElements(sp, [['Ahmed', 'Malek'], ['Villa', '30']]))
+  await apply(d2)
+  const divX2 = d2.elements.find((e) => e.kind === 'divider')!.x
+  assert(t(d2, 'Ahmed').x < divX2 && t(d2, '30').x > divX2, 'LAW 16', `Latin name not on the left (name x=${t(d2, 'Ahmed').x}, div=${divX2})`)
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -350,6 +370,7 @@ async function main() {
   await alignmentLaws()
   await law14CrossAxis()
   await law15SiblingSizes()
+  await law16ReadingDirection()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')
