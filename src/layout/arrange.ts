@@ -3,13 +3,14 @@
 // THE CONTRACT (the owner's words: "I do the sizing - just make the sign
 // ready"): two modes.
 //
-//   'layout'    - Perfect-it. NEVER touches a text size, and NEVER moves a
-//                 hand-placed element off its spot ("let me place it where i
-//                 want - anything - but make sure its aligned correctly").
-//                 Takes what the user set and does pure geometry around it:
-//                 ink-aware tight stacking, blocks centered beside the
-//                 divider, divider content-matched, alignment laws anchored
-//                 on the user's placements.
+//   'layout'    - Perfect-it. NEVER touches a text size, and NEVER changes
+//                 the user's arrangement ("let me place it where i want -
+//                 anything - but make sure its aligned correctly"): relative
+//                 placements are sovereign, alignment laws anchor on them,
+//                 and at the end the WHOLE ensemble - text + divider, one
+//                 group - is centered on the board ("at the end of the day
+//                 this part gotta be at the center"). The divider never moves
+//                 relative to the text; it travels with the group.
 //   'canonical' - Sign Bot. Also sizes the text, using roles trained on the
 //                 real production files, then tamed per LAW 18 (label ~0.85
 //                 above a 1.45 number, names 1.0, numbers capped at 24% of
@@ -247,7 +248,7 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   const mode: ArrangeMode = opts.mode ?? 'layout'
   const { w, h } = design.sign
   const heightOverride = mode === 'layout' ? unifySizes(design) : undefined
-  const { patches, stacks, rows } = await arrangeCore(design, mode, heightOverride)
+  const { patches, stacks, rows, measured, sides } = await arrangeCore(design, mode, heightOverride)
   if (mode !== 'layout') {
     unifyAxes(design, patches)
     // the bot re-designs from scratch: its placements are not the user's hand,
@@ -267,6 +268,7 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   const byId = new Map(design.elements.map((e) => [e.id, e]))
   const inStack = new Set(stacks.flat())
   const inRow = new Set(rows.flat())
+
   const isPlaced = (id: string) => {
     const el = byId.get(id)
     return el?.kind === 'text' && !!el.placed
@@ -277,6 +279,33 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   const anchorFollowers = new Set(
     [...stacks, ...rows].filter((g) => g.some(isPlaced)).flat(),
   )
+
+  // Re-anchor the engine's ideals onto the PREVIOUS output's frame. The final
+  // group-centering pass translates every element, so raw ideals are stale by
+  // exactly that translation - recoverable from any fully engine-owned text
+  // (unplaced, not following an anchor): its current position IS the previous
+  // ideal plus the previous translation. Without this, untouched elements
+  // snap back a little further every pass and Perfect-it never settles.
+  const frameRefs = design.elements.filter(
+    (e): e is TextEl => e.kind === 'text' && !!patches[e.id] && !e.placed && !anchorFollowers.has(e.id),
+  )
+  if (frameRefs.length) {
+    let tx = 0
+    let ty = 0
+    for (const el of frameRefs) {
+      tx += el.x - (patches[el.id].x ?? el.x)
+      ty += el.y - (patches[el.id].y ?? el.y)
+    }
+    tx /= frameRefs.length
+    ty /= frameRefs.length
+    if (Math.abs(tx) > 0.05 || Math.abs(ty) > 0.05) {
+      for (const id of Object.keys(patches)) {
+        const p = patches[id]
+        if (p.x !== undefined) p.x = r1(p.x + tx)
+        if (p.y !== undefined) p.y = r1(p.y + ty)
+      }
+    }
+  }
 
   for (const el of design.elements) {
     if (el.kind === 'divider') continue // divider position is law (bolt axis, content flush)
@@ -348,7 +377,94 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
       if (p && p.y !== undefined) p.y = r1(p.y + shift)
     }
   }
+  // The divider lives IN THE GAP between the two sides, wherever the user's
+  // arrangement put them (LAW 19: it may never touch the text). Re-derive its
+  // position from the settled patches; for the engine's own layout this
+  // reproduces the ideal spot exactly.
+  const divRe = design.elements.find((e): e is DividerEl => e.kind === 'divider')
+  const divReP = divRe ? patches[divRe.id] : undefined
+  if (divRe && divReP && sides && sides.aIds.length && sides.bIds.length) {
+    const mById = new Map(measured.map((m) => [m.el.id, m]))
+    const edge = (id: string, axis: 'x' | 'y', dir: 1 | -1): number | null => {
+      const p = patches[id]
+      const m = mById.get(id)
+      if (!p || !m || p.x === undefined || p.y === undefined) return null
+      const hh = p.heightMm ?? m.el.heightMm
+      return axis === 'x' ? p.x + (dir * (m.aspect * hh)) / 2 : p.y + (dir * (m.inkPerRef * hh)) / 2
+    }
+    const vert = divReP.vertical ?? divRe.vertical
+    const axis: 'x' | 'y' = vert ? 'x' : 'y'
+    const aEdge = Math.max(...sides.aIds.map((id) => edge(id, axis, 1) ?? -Infinity))
+    const bEdge = Math.min(...sides.bIds.map((id) => edge(id, axis, -1) ?? Infinity))
+    const axisPinnedDiv = !vert && !!design.sign.bolts && design.sign.boltPattern === 'sides'
+    if (bEdge - aEdge > divRe.thickness + 2 && !axisPinnedDiv) {
+      if (vert) divReP.x = r1((aEdge + bEdge) / 2)
+      else divReP.y = r1((aEdge + bEdge) / 2)
+    }
+    // and it spans centered on the adjacent content along its own axis
+    const spanAxis: 'x' | 'y' = vert ? 'y' : 'x'
+    const allIds = [...sides.aIds, ...sides.bIds]
+    const lo = Math.min(...allIds.map((id) => edge(id, spanAxis, -1) ?? Infinity))
+    const hi = Math.max(...allIds.map((id) => edge(id, spanAxis, 1) ?? -Infinity))
+    if (hi > lo) {
+      if (vert) divReP.y = r1((lo + hi) / 2)
+      else divReP.x = r1((lo + hi) / 2)
+    }
+    divReP.length = r1(clampDividerToBolts(design, divReP.x ?? divRe.x, divReP.y ?? divRe.y, vert, divRe.thickness, divReP.length ?? divRe.length))
+  }
+
   unifyAxes(design, patches)
+
+  // LAW 21 (final form - the owner: "the whole thing grouped and centered,
+  // text + divider, aligned with the base vertically and horizontally"):
+  // whatever the user arranged, the ensemble is ONE GROUP, and the group's
+  // ink bbox lands dead center on the board. Relative placements stay
+  // sovereign; the group's position is law. The divider never moves relative
+  // to the text - it travels with the group.
+  let allL = Infinity
+  let allR = -Infinity
+  let allT = Infinity
+  let allB = -Infinity
+  for (const m of measured) {
+    const p = patches[m.el.id]
+    if (!p || p.x === undefined || p.y === undefined) continue
+    const hh = p.heightMm ?? m.el.heightMm
+    const iw = (m.aspect * hh) / 2
+    const ih = (m.inkPerRef * hh) / 2
+    allL = Math.min(allL, p.x - iw)
+    allR = Math.max(allR, p.x + iw)
+    allT = Math.min(allT, p.y - ih)
+    allB = Math.max(allB, p.y + ih)
+  }
+  const divEl = design.elements.find((e): e is DividerEl => e.kind === 'divider')
+  const dp = divEl ? patches[divEl.id] : undefined
+  if (divEl && dp && dp.x !== undefined && dp.y !== undefined) {
+    const len = dp.length ?? divEl.length
+    const vert = dp.vertical ?? divEl.vertical
+    allL = Math.min(allL, dp.x - (vert ? divEl.thickness / 2 : len / 2))
+    allR = Math.max(allR, dp.x + (vert ? divEl.thickness / 2 : len / 2))
+    allT = Math.min(allT, dp.y - (vert ? len / 2 : divEl.thickness / 2))
+    allB = Math.max(allB, dp.y + (vert ? len / 2 : divEl.thickness / 2))
+  }
+  if (allR > allL) {
+    const dx = w / 2 - (allL + allR) / 2
+    // LAW 10 outranks vertical centering: a horizontal divider on a side-bolt
+    // board stays welded to the bolt axis
+    const axisPinned = !!divEl && !!dp && !(dp.vertical ?? divEl.vertical) && !!design.sign.bolts && design.sign.boltPattern === 'sides'
+    const dy = axisPinned ? 0 : h / 2 - (allT + allB) / 2
+    for (const el of design.elements) {
+      const p = patches[el.id]
+      if (!p) continue
+      if (p.x !== undefined) p.x = r1(p.x + dx)
+      if (p.y !== undefined) p.y = r1(p.y + dy)
+    }
+    // LAW 19 survives the ride: re-clamp the divider clear of the bolts
+    if (divEl && dp && dp.x !== undefined && dp.y !== undefined) {
+      const vert = dp.vertical ?? divEl.vertical
+      const len = dp.length ?? divEl.length
+      dp.length = r1(clampDividerToBolts(design, dp.x, dp.y, vert, divEl.thickness, len))
+    }
+  }
   return patches
 }
 
@@ -356,11 +472,16 @@ interface ArrangeResult {
   patches: Record<string, ElPatch>
   stacks: string[][] // vertical groups - members share X
   rows: string[][] // horizontal groups - members share Y
+  measured: Measured[] // ink metrics per text, for the group-centering pass
+  // the two sides the divider separates (left/right or top/bottom), so the
+  // divider can re-derive its spot from where the content ACTUALLY settles
+  sides: { aIds: string[]; bIds: string[] } | null
 }
 
 async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: Map<string, { h: number; final: boolean }>): Promise<ArrangeResult> {
   const stacks: string[][] = []
   const rows: string[][] = []
+  let sides: ArrangeResult['sides'] = null
   const userHeights: HeightOf = (m) => heightOverride?.get(m.el.id)?.h ?? Math.max(1, m.el.heightMm)
   const isFinal = (m: Measured) => !!m.el.sized || !!heightOverride?.get(m.el.id)?.final
   const { w, h } = design.sign
@@ -394,25 +515,9 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     const [R, L] = cols
 
     const gapX = DIV_GAP_X * w
-    const sidePad = ((1 - WIDTH_FILL) / 2) * w
-    // LAW 21: the divider sits at the CENTER of the sign (owner: "at the end
-    // of the day this part gotta be at the center") - each column centers in
-    // its own half, however unequal the columns are. A one-column sign keeps
-    // whole-composition centering instead.
-    const centerDiv = R.length > 0 && L.length > 0
-    let s = Infinity
-    if (centerDiv) {
-      // each column must FIT its half
-      const halfW = w / 2 - div.thickness / 2 - gapX - sidePad
-      for (const g of [R, L]) {
-        const u = blockUnits(g)
-        if (u > 0) s = Math.min(s, halfW / u)
-      }
-    } else {
-      const unitsW = blockUnits(R) + blockUnits(L)
-      const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
-      s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
-    }
+    const unitsW = blockUnits(R) + blockUnits(L)
+    const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
+    let s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
     for (const g of [R, L]) {
       if (!g.length) continue
       s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
@@ -424,28 +529,18 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
 
     const wR = blockWidth(R, H)
     const wL = blockWidth(L, H)
-    let cxL: number
-    let divX: number
-    let cxR: number
-    if (centerDiv) {
-      // divider dead center; each column centered between the board edge and
-      // the divider (the half-fit cap above keeps the divider gap clear)
-      divX = w / 2
-      cxL = (w / 2 - div.thickness / 2) / 2
-      cxR = w - cxL
-    } else {
-      const total = wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR
-      const x0 = (w - total) / 2
-      cxL = x0 + wL / 2
-      divX = x0 + wL + (L.length ? gapX : 0) + div.thickness / 2
-      cxR = x0 + wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR / 2
-    }
+    const total = wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR
+    const x0 = (w - total) / 2
+    const cxL = x0 + wL / 2
+    const divX = x0 + wL + (L.length ? gapX : 0) + div.thickness / 2
+    const cxR = x0 + wL + (L.length ? gapX : 0) + div.thickness + (R.length ? gapX : 0) + wR / 2
 
     // the divider always tracks the content beside it (both modes)
     const divLen = clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
     patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(clampDividerToBolts(design, divX, h / 2, true, div.thickness, divLen)) }
     placeStack(R, H, cxR, h / 2, patches, stacks)
     placeStack(L, H, cxL, h / 2, patches, stacks)
+    sides = { aIds: L.map((m) => m.el.id), bIds: R.map((m) => m.el.id) }
     if (oneRow && R.length && L.length) rows.push([R[0].el.id, L[0].el.id])
   } else if (div) {
     // ---- Up | Down (wide) and Vertical (tall) ----
@@ -529,6 +624,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(rowDivLen) }
       placeStack(bottom, H, w / 2, cyB, patches, stacks)
       rows.push([leftM.el.id, rightM.el.id])
+      sides = { aIds: row.map((m) => m.el.id), bIds: bottom.map((m) => m.el.id) }
     } else {
       const unitsH = stackUnits(top) + stackUnits(bottom)
       const gapsH = (top.length ? gapY : 0) + (bottom.length ? gapY : 0) + div.thickness
@@ -569,6 +665,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(clampDividerToBolts(design, w / 2, divY, false, div.thickness, divLen)) }
       placeStack(top, H, w / 2, cyT, patches, stacks)
       placeStack(bottom, H, w / 2, cyB, patches, stacks)
+      sides = { aIds: top.map((m) => m.el.id), bIds: bottom.map((m) => m.el.id) }
     }
   } else {
     // ---- no divider: one centered stack ----
@@ -583,5 +680,5 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       placeStack(lines, H, w / 2, h / 2, patches, stacks)
     }
   }
-  return { patches, stacks, rows }
+  return { patches, stacks, rows, measured, sides }
 }
