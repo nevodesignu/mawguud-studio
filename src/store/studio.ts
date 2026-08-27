@@ -39,7 +39,9 @@ interface StudioState {
   finalizing: boolean
   finError: string | null
   arranging: boolean
+  outlineView: boolean
   saved: boolean
+  toggleOutline(): void
 
   bumpShapeTick(): void
   setFonts(fonts: FontMeta[]): void
@@ -169,7 +171,9 @@ export const useStudio = create<StudioState>((set, get) => ({
   finalizing: false,
   finError: null,
   arranging: false,
+  outlineView: false,
   saved: true,
+  toggleOutline: () => set((s) => ({ outlineView: !s.outlineView })),
 
   bumpShapeTick: () => set((s) => ({ shapeTick: s.shapeTick + 1 })),
   setFonts: (fonts) => set({ fonts }),

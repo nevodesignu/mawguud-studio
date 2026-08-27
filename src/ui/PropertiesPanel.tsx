@@ -40,6 +40,7 @@ export function PropertiesPanel() {
   const finalizing = useStudio((s) => s.finalizing)
   const finError = useStudio((s) => s.finError)
   const arranging = useStudio((s) => s.arranging)
+  const outlineView = useStudio((s) => s.outlineView)
   const fonts = useStudio((s) => s.fonts)
   const st = useStudio.getState()
 
@@ -71,7 +72,10 @@ export function PropertiesPanel() {
             </span>
           </label>
           <div className="row">
-            <button onClick={() => st.clearBridgeOverrides()}>Reset bridges to auto</button>
+            <button className={outlineView ? 'primary' : ''} onClick={() => st.toggleOutline()}>
+              {outlineView ? 'Outline view ON' : 'Outline view'}
+            </button>
+            <button onClick={() => st.clearBridgeOverrides()}>Reset bridges</button>
           </div>
           {finError && <div className="warning">⚠ {finError}</div>}
           {fin && fin.warnings.length > 0 && (

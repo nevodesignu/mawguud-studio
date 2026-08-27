@@ -60,6 +60,7 @@ export function Canvas() {
   const fin = useStudio((s) => s.fin)
   const finalizing = useStudio((s) => s.finalizing)
   const arranging = useStudio((s) => s.arranging)
+  const outlineView = useStudio((s) => s.outlineView)
   useStudio((s) => s.shapeTick) // re-render when shaping results land
 
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -428,7 +429,11 @@ export function Canvas() {
           {mode === 'finalize' && fin && (
             <g>
               {/* the true production shape: everything welded, then bridged */}
-              <path d={multiToD(fin.geometry)} fill="var(--ink)" fillRule="evenodd" pointerEvents="none" />
+              {outlineView ? (
+                <path d={multiToD(fin.geometry)} fill="none" stroke="var(--ink)" strokeWidth={px(1.6)} pointerEvents="none" />
+              ) : (
+                <path d={multiToD(fin.geometry)} fill="var(--ink)" fillRule="evenodd" pointerEvents="none" />
+              )}
               {fin.bridges.map((b) => (
                 <polygon
                   key={b.key}
