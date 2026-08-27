@@ -176,6 +176,31 @@ async function runCase(c: Case, w: number, h: number) {
   }
 }
 
+/**
+ * GOLDEN MASTER - approved by the owner on 2026-08-27 ("this one is perfect"):
+ * bot(["م/يحيي","اسلام"] | ["شقة","20"]) on Mirror 40x20 must produce exactly
+ * names 30mm, label 25.5mm, number 60mm, divider ~113mm. Any engine change
+ * that moves these numbers changes the approved production look - and fails.
+ */
+async function goldenMaster() {
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85 }
+  const design = makeDesign('golden', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
+  const patches = await arrangeDesign(design)
+  for (const el of design.elements) {
+    const p = patches[el.id]
+    if (p) Object.assign(el, p)
+  }
+  const label = 'GOLDEN شقة/20'
+  const byText = (t: string) => design.elements.find((e) => e.kind === 'text' && e.text === t) as TextEl
+  const near = (v: number, want: number, tol: number, what: string) => assert(Math.abs(v - want) <= tol, label, `${what}: ${v} (approved: ${want})`)
+  near(byText('م/يحيي').heightMm, 30, 0.5, 'name line height')
+  near(byText('اسلام').heightMm, 30, 0.5, 'name line height')
+  near(byText('شقة').heightMm, 25.5, 0.5, 'label height')
+  near(byText('20').heightMm, 60, 0.5, 'number height')
+  const d = design.elements.find((e) => e.kind === 'divider')
+  if (d && d.kind === 'divider') near(d.length, 113.1, 2, 'divider length')
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -188,6 +213,7 @@ async function main() {
       await runCase(c, w, h)
     }
   }
+  await goldenMaster()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')
