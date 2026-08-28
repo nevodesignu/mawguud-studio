@@ -301,14 +301,39 @@ function placeStack(lines: Measured[], H: HeightOf, cx: number, cy: number, patc
   })
 }
 
-/** v7 cleanup placement: a column shares ONE X, but every line keeps its own
- * y - the user makes the spacing, the engine only aligns. */
-function placeAligned(lines: Measured[], H: HeightOf, cx: number, patches: Record<string, ElPatch>, stacks?: string[][]): void {
-  if (lines.length === 0) return
-  if (stacks && lines.length > 1) stacks.push(lines.map((m) => m.el.id))
-  for (const m of lines) {
-    patches[m.el.id] = { x: r1(cx), y: r1(m.el.y), heightMm: r1(H(m)) }
+/** v7 cleanup placement for one SIDE of a sign: members sitting at the same
+ * height form a ROW - they level onto one shared Y and keep their own x
+ * (the owner's "make sure villa and 34 are aligned"). Everything else is a
+ * stacked line: it takes the side's shared X and keeps its own y - the user
+ * makes the spacing, the engine only aligns. */
+function alignSide(g: Measured[], sideX: number, H: HeightOf, patches: Record<string, ElPatch>, stacks: string[][], rows: string[][]): void {
+  if (g.length === 0) return
+  const sorted = [...g].sort((a, b) => a.el.y - b.el.y)
+  const clusters: Measured[][] = []
+  for (const m of sorted) {
+    const last = clusters[clusters.length - 1]
+    if (last) {
+      const prev = last[last.length - 1]
+      const meanInk = (prev.inkPerRef * Math.max(1, prev.el.heightMm) + m.inkPerRef * Math.max(1, m.el.heightMm)) / 2
+      if (Math.abs(m.el.y - prev.el.y) < 0.6 * meanInk) {
+        last.push(m)
+        continue
+      }
+    }
+    clusters.push([m])
   }
+  const singles: Measured[] = []
+  for (const c of clusters) {
+    if (c.length > 1) {
+      const cy = r1(c.reduce((a, m) => a + m.el.y, 0) / c.length)
+      for (const m of c) patches[m.el.id] = { x: r1(m.el.x), y: cy, heightMm: r1(H(m)) }
+      rows.push(c.map((m) => m.el.id))
+    } else {
+      singles.push(c[0])
+    }
+  }
+  if (singles.length > 1) stacks.push(singles.map((m) => m.el.id))
+  for (const m of singles) patches[m.el.id] = { x: r1(sideX), y: r1(m.el.y), heightMm: r1(H(m)) }
 }
 
 /** Canonical-units stack extent (for solving the scale factor). */
@@ -709,8 +734,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     if (mode === 'layout') {
       // v7: align each column on the X of the side the user gave it (after a
       // law-16 swap the columns trade sides); every line keeps its own y
-      placeAligned(R, H, rightSpot ? rightSpot.cx : cxR, patches, stacks)
-      placeAligned(L, H, leftSpot ? leftSpot.cx : cxL, patches, stacks)
+      alignSide(R, rightSpot ? rightSpot.cx : cxR, H, patches, stacks, rows)
+      alignSide(L, leftSpot ? leftSpot.cx : cxL, H, patches, stacks, rows)
     } else {
       placeStack(R, H, cxR, h / 2, patches, stacks)
       placeStack(L, H, cxL, h / 2, patches, stacks)
@@ -800,11 +825,9 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       const xL = (w - rowSpan) / 2
       const xR = (w + rowSpan) / 2
       if (mode === 'layout') {
-        // cleanup: row members keep their own x, the row levels on the ink
-        // middle of where the user left the pair
-        const rowCy = r1(inkCenterOf(row).cy)
-        patches[leftM.el.id] = { x: r1(leftM.el.x), y: rowCy, heightMm: r1(H(leftM)) }
-        patches[rightM.el.id] = { x: r1(rightM.el.x), y: rowCy, heightMm: r1(H(rightM)) }
+        // v7: level the pair, keep their x's; the H floor above still comes
+        // from THIS branch so untouched sizes rise to the villa-row base
+        alignSide(row, inkCenterOf(row).cx, H, patches, stacks, rows)
       } else {
         patches[leftM.el.id] = { x: r1(xL + wLm / 2), y: r1(cyRow), heightMm: r1(H(leftM)) }
         patches[rightM.el.id] = { x: r1(xR - wRm / 2), y: r1(cyRow), heightMm: r1(H(rightM)) }
@@ -813,9 +836,9 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       // widest adjacent content - never past it
       const rowDivLen = clampDividerToBolts(design, w / 2, divY, false, div.thickness, Math.max(rowSpan, blockWidth(bottom, H)))
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(rowDivLen) }
-      if (mode === 'layout') placeAligned(bottom, H, bottom.length ? inkCenterOf(bottom).cx : w / 2, patches, stacks)
+      if (mode === 'layout') alignSide(bottom, bottom.length ? inkCenterOf(bottom).cx : w / 2, H, patches, stacks, rows)
       else placeStack(bottom, H, w / 2, cyB, patches, stacks)
-      rows.push([leftM.el.id, rightM.el.id])
+      if (mode !== 'layout') rows.push([leftM.el.id, rightM.el.id])
       sides = { aIds: row.map((m) => m.el.id), bIds: bottom.map((m) => m.el.id) }
     } else {
       const corridor = boltCorridor(design) // LAW 22
@@ -857,8 +880,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       const divLen = Math.max(0.2 * w, blockWidth(top, H), blockWidth(bottom, H))
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(clampDividerToBolts(design, w / 2, divY, false, div.thickness, divLen)) }
       if (mode === 'layout') {
-        placeAligned(top, H, top.length ? inkCenterOf(top).cx : w / 2, patches, stacks)
-        placeAligned(bottom, H, bottom.length ? inkCenterOf(bottom).cx : w / 2, patches, stacks)
+        alignSide(top, top.length ? inkCenterOf(top).cx : w / 2, H, patches, stacks, rows)
+        alignSide(bottom, bottom.length ? inkCenterOf(bottom).cx : w / 2, H, patches, stacks, rows)
       } else {
         placeStack(top, H, w / 2, cyT, patches, stacks)
         placeStack(bottom, H, w / 2, cyB, patches, stacks)
@@ -876,7 +899,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
       const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), scaled(s)(m)))
-      if (mode === 'layout') placeAligned(lines, H, inkCenterOf(lines).cx, patches, stacks)
+      if (mode === 'layout') alignSide(lines, inkCenterOf(lines).cx, H, patches, stacks, rows)
       else placeStack(lines, H, w / 2, h / 2, patches, stacks)
     }
   }

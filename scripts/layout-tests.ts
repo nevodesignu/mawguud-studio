@@ -704,6 +704,27 @@ async function manualSpacingSovereign() {
   const snap = design.elements.map((e) => [e.x, e.y] as const)
   await apply()
   design.elements.forEach((e, i) => assert(Math.abs(e.x - snap[i][0]) <= 0.15 && Math.abs(e.y - snap[i][1]) <= 0.15, label, `not idempotent: el ${i}`))
+
+  // the owner's screenshot: a Villa | 34 pair BELOW the divider, slightly
+  // unlevel - Perfect-it levels the pair (one Y), keeps both x's, and does
+  // NOT mistake them for a stack
+  const sp2: TemplateSpec = { finish: 'lighted', layout: 'updown', w: 400, h: 250, boltDia: 13.0, boltInsetX: 32.5, boltInsetY: 32.5, boltPattern: 'corners', divThick: 2.5, radius: 2.5 }
+  const d2 = makeDesign('rowbelow', signFromSpec(sp2), botElements(sp2, [['المهندس عبيد محمد'], ['Villa', '34']]))
+  const t2 = (txt: string) => d2.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  const p20 = await arrangeDesign(d2, { mode: 'canonical' })
+  for (const el of d2.elements) Object.assign(el, p20[el.id] ?? {})
+  // spread the pair like the screenshot - side by side, slightly unlevel
+  t2('Villa').x = 120
+  t2('Villa').y = 170
+  t2('34').x = 290
+  t2('34').y = 163
+  const villaX = t2('Villa').x
+  const numX = t2('34').x
+  const p21 = await arrangeDesign(d2, { mode: 'layout' })
+  for (const el of d2.elements) Object.assign(el, p21[el.id] ?? {})
+  assert(Math.abs(t2('Villa').y - t2('34').y) < 0.11, label, `pair below divider not leveled: ${t2('Villa').y} vs ${t2('34').y}`)
+  assert(Math.abs(t2('Villa').x - t2('34').x - (villaX - numX)) < 0.3, label, `pair x spread not preserved: ${(t2('Villa').x - t2('34').x).toFixed(1)} vs ${(villaX - numX).toFixed(1)}`)
+  assert(Math.abs(t2('Villa').x - t2('34').x) > 100, label, 'pair was slammed into a stack')
 }
 
 /**
