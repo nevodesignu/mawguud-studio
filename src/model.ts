@@ -149,18 +149,22 @@ export interface TemplateSpec {
   boltInsetY: number
   boltPattern: BoltPattern
   divThick: number
+  radius: number // board corner fillet - the real boards are rounded
 }
 
-const L = (layout: Layout, w: number, h: number, divThick = 2.85): TemplateSpec => ({
+const cornerR = (w: number, h: number) => (Math.max(w, h) <= 400 ? 2.5 : 3.5)
+
+const L = (layout: Layout, w: number, h: number, divThick = 2.5): TemplateSpec => ({
   finish: 'lighted',
   layout,
   w,
   h,
-  boltDia: 13.4,
-  boltInsetX: 32.8,
-  boltInsetY: 32.8,
+  boltDia: 13.0,
+  boltInsetX: 32.5,
+  boltInsetY: 32.5,
   boltPattern: 'corners',
   divThick,
+  radius: cornerR(w, h),
 })
 
 const M = (layout: Layout, w: number, h: number, boltDia: number, inset: number, divThick: number, pattern: BoltPattern = 'corners'): TemplateSpec => ({
@@ -173,38 +177,44 @@ const M = (layout: Layout, w: number, h: number, boltDia: number, inset: number,
   boltInsetY: pattern === 'sides' ? h / 2 : inset,
   boltPattern: pattern,
   divThick,
+  radius: cornerR(w, h),
 })
 
 export const templateCatalog: TemplateSpec[] = [
-  // Lighted - bolts constant across sizes (measured: dia 13.35, inset 32.8)
+  // ALL VALUES RE-MEASURED 2026-08-27 from the owner's 27 production .ai files
+  // (the full template pack). Every number is the CUT PATH itself - the earlier
+  // catalog measured the stroked outline, so every hole and bar ran ~0.35mm
+  // (one 1pt stroke) oversize.
+  // Lighted - bolts constant across every size: dia 13.0, inset 32.5
   L('leftright', 400, 250),
   L('leftright', 500, 300),
   L('leftright', 600, 350),
   L('leftright', 700, 400),
   L('updown', 400, 250),
-  L('updown', 500, 300, 3.35),
-  L('updown', 600, 350, 3.35),
-  L('updown', 700, 400, 3.35),
+  L('updown', 500, 300, 3.0),
+  L('updown', 600, 350, 3.0),
+  L('updown', 700, 400, 3.0),
   L('vertical', 250, 400),
   L('vertical', 300, 500),
   L('vertical', 350, 600),
   L('vertical', 400, 700),
-  // Mirror - bolts scale with size (measured per size); 30cm boards use 2 side bolts
-  M('leftright', 300, 150, 6.5, 15.3, 2.6, 'sides'),
-  M('leftright', 400, 200, 6.6, 23.6, 2.85),
-  M('leftright', 500, 250, 6.9, 29.4, 2.95),
-  M('leftright', 600, 300, 7.4, 35.3, 3.05),
-  M('leftright', 700, 350, 7.9, 41.1, 3.25),
-  M('updown', 300, 150, 6.4, 18.3, 2.75, 'sides'),
-  M('updown', 400, 200, 6.6, 23.6, 2.85),
-  M('updown', 500, 250, 6.9, 29.4, 3.05),
-  M('updown', 600, 300, 7.4, 35.3, 3.15),
-  M('updown', 700, 350, 7.9, 41.1, 3.25),
-  M('vertical', 150, 300, 6.4, 14.3, 2.65, 'sides'),
-  M('vertical', 200, 400, 6.6, 23.6, 2.85),
-  M('vertical', 250, 500, 6.9, 29.4, 3.05),
-  M('vertical', 300, 600, 7.4, 35.3, 3.05),
-  M('vertical', 350, 700, 7.9, 41.1, 3.25),
+  // Mirror - bolts scale with the board's long side (inset = 5.82% of it);
+  // the 30cm boards use 2 bolts at mid-height instead of 4 corners
+  M('leftright', 300, 150, 6.5, 15.0, 2.25, 'sides'),
+  M('leftright', 400, 200, 6.2, 23.3, 2.5),
+  M('leftright', 500, 250, 6.5, 29.1, 2.6),
+  M('leftright', 600, 300, 7.0, 34.9, 2.7),
+  M('leftright', 700, 350, 7.5, 40.7, 2.9),
+  M('updown', 300, 150, 6.0, 18.0, 2.4, 'sides'),
+  M('updown', 400, 200, 6.2, 23.3, 2.5),
+  M('updown', 500, 250, 6.5, 29.1, 2.7),
+  M('updown', 600, 300, 7.0, 34.9, 2.8),
+  M('updown', 700, 350, 7.5, 40.7, 2.9),
+  M('vertical', 150, 300, 6.0, 14.0, 2.3, 'sides'),
+  M('vertical', 200, 400, 6.2, 23.3, 2.5),
+  M('vertical', 250, 500, 6.5, 29.1, 2.7),
+  M('vertical', 300, 600, 7.0, 34.9, 2.7),
+  M('vertical', 350, 700, 7.5, 40.7, 2.9),
 ]
 
 export const finishLabel: Record<Finish, string> = { lighted: 'Lighted', mirror: 'Mirror' }
@@ -219,7 +229,7 @@ export function signFromSpec(spec: TemplateSpec): SignSpec {
   return {
     w: spec.w,
     h: spec.h,
-    radius: 0, // Mawguud boards are sharp-cornered
+    radius: spec.radius, // measured fillet - every real board is rounded (2.5 / 3.5mm)
     bolts: true,
     boltDia: spec.boltDia,
     boltInsetX: spec.boltInsetX,

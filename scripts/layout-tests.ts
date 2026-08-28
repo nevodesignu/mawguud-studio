@@ -13,7 +13,7 @@ import { initHB } from '../src/shaping/engine'
 import { setFontDataProvider } from '../src/fonts/catalog'
 import { shapedAsync } from '../src/shaping/service'
 import { arrangeDesign, optimizeNameSplits } from '../src/layout/arrange'
-import { makeDesign, botElements, signFromSpec, boltCenters, type TemplateSpec, type Design, type TextEl, type Layout } from '../src/model'
+import { makeDesign, makeFromSpec, botElements, signFromSpec, boltCenters, templateCatalog, type TemplateSpec, type Design, type TextEl, type Layout } from '../src/model'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -120,6 +120,22 @@ function assert(cond: boolean, label: string, detail: string) {
   }
 }
 
+/** LAW 22 invariant: letter ink keeps clear air from every bolt hole. */
+async function assertTextClearOfBolts(design: Design, label: string, minGap: number) {
+  const centers = boltCenters(design.sign)
+  if (!centers.length) return
+  const rad = design.sign.boltDia / 2
+  const { texts } = await placed(design)
+  for (const t of texts) {
+    for (const [bx, by] of centers) {
+      const dx = Math.max(0, Math.max(t.left - bx, bx - t.right))
+      const dy = Math.max(0, Math.max(t.top - by, by - t.bottom))
+      const dist = Math.hypot(dx, dy) - rad
+      assert(dist >= minGap, label, `LAW 22: "${t.el.text}" is ${dist.toFixed(1)}mm from the bolt at (${bx.toFixed(0)},${by.toFixed(0)}) (needs >= ${minGap})`)
+    }
+  }
+}
+
 /** LAW 19 invariant: the divider keeps at least `minGap` mm of air from every bolt circle. */
 function assertDividerClear(design: Design, label: string, minGap: number) {
   const div = design.elements.find((e) => e.kind === 'divider')
@@ -170,6 +186,8 @@ async function runCase(c: Case, w: number, h: number) {
     // LAW 19: never touching a bolt circle either
     assertDividerClear(design, label, 1)
   }
+  // LAW 22: no letter touches a bolt hole
+  await assertTextClearOfBolts(design, label, 1.5)
   // 2. LAW 21 (final form): the whole composition - text + divider, one
   // group - is centered on the board
   if (texts.length) {
@@ -388,14 +406,42 @@ async function perfectItCleanup() {
 
 /** Side bolts sit at mid-height: the horizontal divider must run on their axis. */
 async function boltAxisLaw() {
-  const sp: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 300, h: 150, boltDia: 6.5, boltInsetX: 15.3, boltInsetY: 75, boltPattern: 'sides', divThick: 2.85 }
+  const label = 'BOLT AXIS'
+  // PINNED: a VERTICAL board with its two bolts in the middle of the sides -
+  // the owner's Mirror Vertical 15x30, where the real template draws the line
+  // straight through the bolt axis.
+  const vert: TemplateSpec = { finish: 'mirror', layout: 'vertical', w: 150, h: 300, boltDia: 6.0, boltInsetX: 14.0, boltInsetY: 150, boltPattern: 'sides', divThick: 2.3 }
   for (const mode of ['canonical', 'layout'] as const) {
-    const design = makeDesign('axis', signFromSpec(sp), botElements(sp, [['34'], ['المهندس عبيد محمد']]))
+    const design = makeDesign('axis', signFromSpec(vert), botElements(vert, [['12'], ['عائلة', 'الدرويش']]))
     const patches = await arrangeDesign(design, { mode })
     const d = design.elements.find((e) => e.kind === 'divider')!
     const y = patches[d.id]?.y
-    assert(y !== undefined && Math.abs(y - 75) < 0.11, 'BOLT AXIS', `divider not on the bolt axis (${mode}): y=${y} vs 75`)
+    assert(y !== undefined && Math.abs(y - 150) < 0.11, label, `vertical sign: divider off the bolt axis (${mode}): y=${y} vs 150`)
   }
+  // and it STAYS pinned when the user drags the blocks around
+  const dragged = makeDesign('axis2', signFromSpec(vert), botElements(vert, [['12'], ['عائلة', 'الدرويش']]))
+  const p0 = await arrangeDesign(dragged, { mode: 'canonical' })
+  for (const el of dragged.elements) Object.assign(el, p0[el.id] ?? {})
+  for (const el of dragged.elements) if (el.kind === 'text') el.y += el.y < 150 ? -18 : 12
+  const p1 = await arrangeDesign(dragged, { mode: 'layout' })
+  const dv = dragged.elements.find((e) => e.kind === 'divider')!
+  assert(Math.abs((p1[dv.id]?.y ?? 0) - 150) < 0.11, label, `vertical sign: dragging content moved the pinned line to ${p1[dv.id]?.y}`)
+
+  // NOT PINNED: every other sign - "other than that divider only move". A wide
+  // board with the same side-bolt pattern lets its line follow the content.
+  const wide: TemplateSpec = { finish: 'mirror', layout: 'updown', w: 300, h: 150, boltDia: 6.0, boltInsetX: 18.0, boltInsetY: 75, boltPattern: 'sides', divThick: 2.4 }
+  const free = makeDesign('free', signFromSpec(wide), botElements(wide, [['34'], ['المهندس عبيد محمد']]))
+  const f0 = await arrangeDesign(free, { mode: 'canonical' })
+  for (const el of free.elements) Object.assign(el, f0[el.id] ?? {})
+  // push the top block up hard: an unpinned line follows the gap it opens
+  for (const el of free.elements) if (el.kind === 'text' && el.y < 75) el.y -= 22
+  const f1 = await arrangeDesign(free, { mode: 'layout' })
+  const fd = free.elements.find((e) => e.kind === 'divider')!
+  const fy = f1[fd.id]?.y ?? 0
+  assert(Math.abs(fy - 75) > 1.5, label, `wide side-bolt sign: divider is still welded to mid-height (y=${fy}) - it should follow the content`)
+  // the freed line still never touches a bolt (LAW 19)
+  for (const el of free.elements) Object.assign(el, f1[el.id] ?? {})
+  assertDividerClear(free, label, 1)
 }
 
 /** LAW 11: bot text is as big as possible - the name must fill most of the width. */
@@ -623,6 +669,51 @@ async function law17NameSplit() {
   assert(untouched.elements.filter((e) => e.kind === 'text').length === 4, 'LAW 17', 'already-stacked names were split again')
 }
 
+/**
+ * LAW 22 (owner 2026-08-27: "IT CANNOT NEVER EVER LETTERS DIVIDER HIT THE
+ * BOLTS"): letters keep clear of every bolt hole in both modes - the solver
+ * fills between the bolts, and Perfect-it pushes a hand-dragged block off a
+ * bolt instead of leaving the collision.
+ */
+async function law22BoltClearance() {
+  const label = 'LAW 22'
+  // the owner's screenshot case: Lighted UD 40x25 - big corner bolts, wide name
+  const lighted = templateCatalog.find((t) => t.finish === 'lighted' && t.layout === 'updown' && t.w === 400)!
+  const d1 = makeDesign('l22', signFromSpec(lighted), botElements(lighted, [['المهندس عبيد محمد'], ['Villa', '34']]))
+  const p1 = await arrangeDesign(d1, { mode: 'canonical' })
+  for (const el of d1.elements) Object.assign(el, p1[el.id] ?? {})
+  await assertTextClearOfBolts(d1, `${label} bot lighted`, 1.5)
+
+  // drag the name straight onto the top bolts - Perfect-it must push it clear
+  for (const el of d1.elements) if (el.kind === 'text' && el.text.includes('المهندس')) el.y = lighted.boltInsetY
+  const p2 = await arrangeDesign(d1, { mode: 'layout' })
+  for (const el of d1.elements) Object.assign(el, p2[el.id] ?? {})
+  await assertTextClearOfBolts(d1, `${label} dragged-onto-bolts`, 1.5)
+
+  // the panel's critical: stock template seeds on the PINNED vertical board,
+  // straight into Perfect-it - the pinned line must never cross a letter
+  const pinnedSpec = templateCatalog.find((t) => t.boltPattern === 'sides' && t.h > t.w)!
+  const d2 = makeFromSpec(pinnedSpec)
+  const p3 = await arrangeDesign(d2, { mode: 'layout' })
+  for (const el of d2.elements) Object.assign(el, p3[el.id] ?? {})
+  const { texts: t2, div: div2 } = await placed(d2)
+  assert(div2 !== null, label, 'pinned board lost its divider')
+  if (div2) {
+    assert(Math.abs(div2.y - pinnedSpec.h / 2) < 0.11, label, `pinned line moved: y=${div2.y}`)
+    for (const t of t2) {
+      const overlapY = Math.min(t.bottom, div2.y + div2.thickness / 2) - Math.max(t.top, div2.y - div2.thickness / 2)
+      const overlapX = Math.min(t.right, div2.x + div2.length / 2) - Math.max(t.left, div2.x - div2.length / 2)
+      assert(!(overlapX > 0.5 && overlapY > 0), label, `pinned line cuts through "${t.el.text}" (template->perfect flow)`)
+    }
+  }
+  await assertTextClearOfBolts(d2, `${label} pinned template`, 1.5)
+  // and hammering the button stays stable
+  const snap = d2.elements.map((e) => [e.x, e.y] as const)
+  const p4 = await arrangeDesign(d2, { mode: 'layout' })
+  for (const el of d2.elements) Object.assign(el, p4[el.id] ?? {})
+  d2.elements.forEach((e, i) => assert(Math.abs(e.x - snap[i][0]) <= 0.2 && Math.abs(e.y - snap[i][1]) <= 0.2, label, `pinned board not idempotent: el ${i}`))
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -648,6 +739,7 @@ async function main() {
   await law18NumberScale()
   await law19DividerClear()
   await law20RowHuddle()
+  await law22BoltClearance()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')

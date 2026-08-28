@@ -62,6 +62,156 @@ const NUMBER_CAP = 0.275
 export type ArrangeMode = 'layout' | 'canonical'
 
 /**
+ * LAW 10, refined by the owner from the production template pack (2026-08-27:
+ * "in vertical sign vertical line move with bolts ... that's only for vertical
+ * with bolts in the middle, other than that divider only move"): the divider
+ * is welded to the bolt axis on exactly ONE product family - a VERTICAL board
+ * whose two bolts sit in the middle of its sides (Mirror Vertical 15x30). That
+ * is how their real file is drawn: line and bolts share one axis. On every
+ * other sign the divider is free and simply follows the content.
+ */
+const boltAxisSign = (design: Design) =>
+  !!design.sign.bolts && design.sign.boltPattern === 'sides' && design.sign.h > design.sign.w
+
+// LAW 22 (owner 2026-08-27: "IT CANNOT NEVER EVER LETTERS DIVIDER HIT THE
+// BOLTS"): letter ink keeps this much air from a bolt hole's edge.
+const BOLT_TEXT_AIR = 3
+
+/** The vertical/horizontal corridor the canonical solver may fill: the space
+ * between the bolt keep-out zones. Wide content beside corner bolts must live
+ * between the bolt rows; content between side bolts must clear their columns. */
+function boltCorridor(design: Design): { maxW: number; maxH: number } {
+  const { w, h, bolts, boltDia, boltInsetX: ix, boltInsetY: iy, boltPattern } = design.sign
+  if (!bolts) return { maxW: w, maxH: h }
+  const keep = boltDia / 2 + BOLT_TEXT_AIR
+  // floor at 30% of the board: a degenerate inset must never starve the solve
+  // to nothing (the resolver still enforces true clearance afterwards)
+  if (boltPattern === 'sides') return { maxW: Math.max(0.3 * w, w - 2 * (ix + keep)), maxH: h }
+  return { maxW: w, maxH: Math.max(0.3 * h, h - 2 * (iy + keep)) }
+}
+
+interface InkRect {
+  x0: number
+  x1: number
+  y0: number
+  y1: number
+}
+
+/** Push distance (per direction) for a rect to clear a circle by `clear`. 0 = already clear. */
+function rectCircleGap(r: InkRect, cx: number, cy: number, rad: number): number {
+  const dx = Math.max(0, Math.max(r.x0 - cx, cx - r.x1))
+  const dy = Math.max(0, Math.max(r.y0 - cy, cy - r.y1))
+  return Math.hypot(dx, dy) - rad
+}
+
+/**
+ * LAW 22 enforcement: blocks (stacks/rows/loose texts) are pushed - as whole
+ * units, minimally, axis-aligned - until every letter clears every bolt hole,
+ * and (on the one bolt-axis board) the pinned divider band. Runs in BOTH
+ * modes; the canonical corridor makes real pushes rare.
+ */
+function resolveObstacles(design: Design, patches: Record<string, ElPatch>, measured: Measured[], stacks: string[][], rows: string[][]): void {
+  const { w, h } = design.sign
+  const centers = boltCenters(design.sign)
+  const pinned = boltAxisSign(design)
+  const divEl = design.elements.find((e): e is DividerEl => e.kind === 'divider')
+  if (!centers.length && !(pinned && divEl)) return
+  const rad = design.sign.boltDia / 2 + BOLT_TEXT_AIR
+  const mById = new Map(measured.map((m) => [m.el.id, m]))
+
+  const grouped = new Set([...stacks, ...rows].flat())
+  const blocks: string[][] = [...stacks, ...rows]
+  for (const m of measured) if (!grouped.has(m.el.id)) blocks.push([m.el.id])
+
+  const rectOf = (id: string): InkRect | null => {
+    const p = patches[id]
+    const m = mById.get(id)
+    if (!p || !m || p.x === undefined || p.y === undefined) return null
+    const hh = p.heightMm ?? m.el.heightMm
+    return { x0: p.x - (m.aspect * hh) / 2, x1: p.x + (m.aspect * hh) / 2, y0: p.y - (m.inkPerRef * hh) / 2, y1: p.y + (m.inkPerRef * hh) / 2 }
+  }
+  // the pinned divider band no letter may cross (only on the bolt-axis board)
+  const band = pinned && divEl ? { y0: h / 2 - divEl.thickness / 2 - 1.5, y1: h / 2 + divEl.thickness / 2 + 1.5 } : null
+
+  const pushNeeded = (r: InkRect): { left: number; right: number; up: number; down: number } => {
+    let left = 0
+    let right = 0
+    let up = 0
+    let down = 0
+    for (const [bx, by] of centers) {
+      if (rectCircleGap(r, bx, by, rad) >= 0) continue
+      right = Math.max(right, bx + rad - r.x0)
+      left = Math.max(left, r.x1 - (bx - rad))
+      down = Math.max(down, by + rad - r.y0)
+      up = Math.max(up, r.y1 - (by - rad))
+    }
+    if (band && r.y1 > band.y0 && r.y0 < band.y1) {
+      down = Math.max(down, band.y1 - r.y0)
+      up = Math.max(up, r.y1 - band.y0)
+    }
+    return { left, right, up, down }
+  }
+
+  for (let iter = 0; iter < 3; iter++) {
+    let moved = false
+    for (const block of blocks) {
+      const rects = block.map(rectOf).filter((r): r is InkRect => r !== null)
+      if (!rects.length) continue
+      let need = { left: 0, right: 0, up: 0, down: 0 }
+      for (const r of rects) {
+        const n = pushNeeded(r)
+        need = { left: Math.max(need.left, n.left), right: Math.max(need.right, n.right), up: Math.max(need.up, n.up), down: Math.max(need.down, n.down) }
+      }
+      if (need.left === 0 && need.right === 0 && need.up === 0 && need.down === 0) continue
+      // candidate axis-aligned escapes, smallest first; must clear EVERYTHING
+      // for every rect in the block and keep the block on the board
+      const cands: [number, number][] = []
+      if (need.up > 0) cands.push([0, -need.up])
+      if (need.down > 0) cands.push([0, need.down])
+      if (need.left > 0) cands.push([-need.left, 0])
+      if (need.right > 0) cands.push([need.right, 0])
+      cands.sort((a, b) => Math.hypot(...a) - Math.hypot(...b))
+      let applied: [number, number] | null = null
+      for (const [dx, dy] of cands) {
+        const ok = rects.every((r) => {
+          const t = { x0: r.x0 + dx, x1: r.x1 + dx, y0: r.y0 + dy, y1: r.y1 + dy }
+          const n = pushNeeded(t)
+          return n.left === 0 && n.right === 0 && n.up === 0 && n.down === 0 && t.x0 >= 1 && t.x1 <= w - 1 && t.y0 >= 1 && t.y1 <= h - 1
+        })
+        if (ok) {
+          applied = [dx, dy]
+          break
+        }
+      }
+      if (!applied) continue // no clean escape (board too full) - leave it, the warning system reports collisions
+      for (const id of block) {
+        const p = patches[id]
+        if (p && p.x !== undefined) p.x = r1(p.x + applied[0])
+        if (p && p.y !== undefined) p.y = r1(p.y + applied[1])
+      }
+      moved = true
+    }
+    if (!moved) break
+  }
+}
+
+/** True if any placed letter currently violates LAW 22 after translating by (dx, dy). */
+function anyBoltHit(design: Design, patches: Record<string, ElPatch>, measured: Measured[], dx: number, dy: number): boolean {
+  const centers = boltCenters(design.sign)
+  if (!centers.length) return false
+  const rad = design.sign.boltDia / 2 + BOLT_TEXT_AIR
+  for (const m of measured) {
+    const p = patches[m.el.id]
+    if (!p || p.x === undefined || p.y === undefined) continue
+    const hh = p.heightMm ?? m.el.heightMm
+    const r: InkRect = { x0: p.x + dx - (m.aspect * hh) / 2, x1: p.x + dx + (m.aspect * hh) / 2, y0: p.y + dy - (m.inkPerRef * hh) / 2, y1: p.y + dy + (m.inkPerRef * hh) / 2 }
+    for (const [bx, by] of centers) if (rectCircleGap(r, bx, by, rad) < 0) return true
+  }
+  return false
+}
+
+
+/**
  * LAW 19: the divider never touches a bolt circle. Every engine-emitted
  * divider length is clamped so each bolt hole keeps a clear margin of air
  * (one bolt radius, at least 3mm) - matters most on side-bolt boards where
@@ -322,8 +472,9 @@ export async function optimizeNameSplits(design: Design): Promise<Design> {
 export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Promise<Record<string, ElPatch>> {
   const mode: ArrangeMode = opts.mode ?? 'layout'
   if (mode !== 'layout') {
-    const { patches } = await arrangeCore(design, mode, undefined)
+    const { patches, measured, stacks, rows } = await arrangeCore(design, mode, undefined)
     unifyAxes(design, patches)
+    resolveObstacles(design, patches, measured, stacks, rows) // LAW 22
     return patches
   }
   // Cleanup settles to its FIXPOINT: one pass rebuilds the blocks, refits the
@@ -346,6 +497,10 @@ async function layoutOnce(design: Design): Promise<Record<string, ElPatch>> {
   // user order - around the spot the user left it. What remains is the
   // divider, cross-block alignment, and the group's position.
 
+  // LAW 22 first: blocks pushed clear of bolts (and of the pinned line) so
+  // the divider re-fit below sees the REAL settled arrangement
+  resolveObstacles(design, patches, measured, stacks, rows)
+
   // The divider lives IN THE GAP between the two sides, wherever the user's
   // arrangement put them (LAW 19: it may never touch the text). Re-derive its
   // position from the settled patches; for the engine's own layout this
@@ -363,7 +518,7 @@ async function layoutOnce(design: Design): Promise<Record<string, ElPatch>> {
     }
     const vert = divReP.vertical ?? divRe.vertical
     const axis: 'x' | 'y' = vert ? 'x' : 'y'
-    const axisPinnedDiv = !vert && !!design.sign.bolts && design.sign.boltPattern === 'sides'
+    const axisPinnedDiv = !vert && boltAxisSign(design)
     if (sides.aIds.length && sides.bIds.length) {
       const aEdge = Math.max(...sides.aIds.map((id) => edge(id, axis, 1) ?? -Infinity))
       const bEdge = Math.min(...sides.bIds.map((id) => edge(id, axis, -1) ?? Infinity))
@@ -400,6 +555,7 @@ async function layoutOnce(design: Design): Promise<Record<string, ElPatch>> {
   }
 
   unifyAxesBlocks(design, patches, stacks, rows)
+  resolveObstacles(design, patches, measured, stacks, rows) // LAW 22 survives unify
 
   // LAW 21 (final form - the owner: "the whole thing grouped and centered,
   // text + divider, aligned with the base vertically and horizontally"):
@@ -436,12 +592,25 @@ async function layoutOnce(design: Design): Promise<Record<string, ElPatch>> {
     const dx = w / 2 - (allL + allR) / 2
     // LAW 10 outranks vertical centering: a horizontal divider on a side-bolt
     // board stays welded to the bolt axis
-    const axisPinned = !!divEl && !!dp && !(dp.vertical ?? divEl.vertical) && !!design.sign.bolts && design.sign.boltPattern === 'sides'
-    const dy = axisPinned ? 0 : h / 2 - (allT + allB) / 2
+    const axisPinned = !!divEl && !!dp && !(dp.vertical ?? divEl.vertical) && boltAxisSign(design)
+    let dy = axisPinned ? 0 : h / 2 - (allT + allB) / 2
+    let ddx = dx
+    // LAW 22 outranks perfect centering: if sliding the group to center would
+    // push a letter into a bolt zone, back the slide off until it is clean
+    if (anyBoltHit(design, patches, measured, ddx, dy)) {
+      let k = 1
+      for (let step = 0; step < 8; step++) {
+        k /= 2
+        if (!anyBoltHit(design, patches, measured, ddx * k, dy * k)) break
+      }
+      if (anyBoltHit(design, patches, measured, ddx * k, dy * k)) k = 0
+      ddx *= k
+      dy *= k
+    }
     for (const el of design.elements) {
       const p = patches[el.id]
       if (!p) continue
-      if (p.x !== undefined) p.x = r1(p.x + dx)
+      if (p.x !== undefined) p.x = r1(p.x + ddx)
       if (p.y !== undefined) p.y = r1(p.y + dy)
     }
     // LAW 19 survives the ride: re-clamp the divider clear of the bolts
@@ -505,12 +674,13 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     const [R, L] = cols
 
     const gapX = DIV_GAP_X * w
+    const corridor = boltCorridor(design) // LAW 22: fill only between the bolts
     const unitsW = blockUnits(R) + blockUnits(L)
     const gapsW = (R.length ? gapX : 0) + (L.length ? gapX : 0) + div.thickness
-    let s = unitsW > 0 ? (WIDTH_FILL * w - gapsW) / unitsW : 1
+    let s = unitsW > 0 ? (Math.min(WIDTH_FILL * w, corridor.maxW) - gapsW) / unitsW : 1
     for (const g of [R, L]) {
       if (!g.length) continue
-      s = Math.min(s, (HEIGHT_FILL * h) / stackUnits(g))
+      s = Math.min(s, Math.min(HEIGHT_FILL * h, corridor.maxH) / stackUnits(g))
       for (const m of g) s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
     }
     // the canonical base is the floor for UNTOUCHED sizes only - a size the
@@ -542,7 +712,7 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     const bottom = measured.filter((m) => m.el.y >= div.y).sort(byY)
     const gapY = DIV_GAP_Y * h
     // side bolts sit at mid-height: the line must run exactly on their axis
-    const boltAxis = design.sign.bolts && design.sign.boltPattern === 'sides'
+    const boltAxis = boltAxisSign(design)
     const padY = ((1 - HEIGHT_FILL) / 2) * h
 
     // catalog Villa-row: a label + a number on top spread on ONE row. In
@@ -564,14 +734,15 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       const num = row.find((m) => m.role === 'number')!
       const other = row.find((m) => m.role !== 'number')!
       const labelRight = hasArabic(other.el.text)
-      const CW = WIDTH_FILL * w
+      const corridor = boltCorridor(design) // LAW 22
+      const CW = Math.min(WIDTH_FILL * w, corridor.maxW)
       const midGap = 0.06 * w
 
       let s = Infinity
       const rowInkUnits = rowUnit * Math.max(...row.map((m) => m.inkPerRef))
       const unitsH = rowInkUnits + stackUnits(bottom)
       const gapsH = gapY + div.thickness + (bottom.length ? gapY : 0)
-      s = Math.min(s, (HEIGHT_FILL * h - gapsH) / unitsH)
+      s = Math.min(s, (Math.min(HEIGHT_FILL * h, corridor.maxH) - gapsH) / unitsH)
       s = Math.min(s, (CW - midGap) / (num.aspect * rowUnit + other.aspect * rowUnit))
       for (const m of bottom) s = Math.min(s, CW / (m.aspect * ratioOf(m)))
       s = Math.min(s, (NUMBER_CAP * h) / rowUnit)
@@ -636,11 +807,12 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       rows.push([leftM.el.id, rightM.el.id])
       sides = { aIds: row.map((m) => m.el.id), bIds: bottom.map((m) => m.el.id) }
     } else {
+      const corridor = boltCorridor(design) // LAW 22
       const unitsH = stackUnits(top) + stackUnits(bottom)
       const gapsH = (top.length ? gapY : 0) + (bottom.length ? gapY : 0) + div.thickness
-      let s = unitsH > 0 ? (HEIGHT_FILL * h - gapsH) / unitsH : 1
+      let s = unitsH > 0 ? (Math.min(HEIGHT_FILL * h, corridor.maxH) - gapsH) / unitsH : 1
       for (const m of measured) {
-        s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
+        s = Math.min(s, Math.min(0.8 * w, corridor.maxW) / (m.aspect * ratioOf(m)))
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
       if (boltAxis) {
@@ -683,9 +855,10 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     // ---- no divider: one centered stack ----
     const lines = [...measured].sort(byY)
     if (lines.length) {
-      let s = (0.72 * h) / stackUnits(lines)
+      const corridor = boltCorridor(design) // LAW 22
+      let s = Math.min(0.72 * h, corridor.maxH) / stackUnits(lines)
       for (const m of lines) {
-        s = Math.min(s, (0.8 * w) / (m.aspect * ratioOf(m)))
+        s = Math.min(s, Math.min(0.8 * w, corridor.maxW) / (m.aspect * ratioOf(m)))
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
       const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), scaled(s)(m)))

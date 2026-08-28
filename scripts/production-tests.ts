@@ -118,6 +118,21 @@ async function runTemplate(spec: TemplateSpec, order: string[][], writePdf: bool
     }
   }
 
+  // LAW 22: no letter ink inside a bolt keep-out (check the welded geometry
+  // itself against every bolt circle)
+  for (const [bx, by] of boltCenters(design.sign)) {
+    const rad = design.sign.boltDia / 2
+    for (const poly of geometry) {
+      for (const ring of poly) {
+        for (const [px, py] of ring) {
+          const d = Math.hypot(px - bx, py - by) - rad
+          assert(d >= 1.5, label, `LAW 22: cut geometry ${d.toFixed(1)}mm from the bolt at (${bx.toFixed(0)},${by.toFixed(0)})`)
+          if (d < 1.5) return
+        }
+      }
+    }
+  }
+
   // 4. bridge + cut-line sanity
   assert(bridges < 60, label, `implausible bridge count: ${bridges}`)
   const wantBolts = spec.boltPattern === 'sides' ? 2 : 4

@@ -10,7 +10,8 @@
     "smoke": "tsx scripts/smoke-export.ts",
     "layout-tests": "tsx scripts/layout-tests.ts",
     "editor-tests": "tsx scripts/editor-tests.ts",
-    "production-tests": "tsx scripts/production-tests.ts"
+    "production-tests": "tsx scripts/production-tests.ts",
+    "template-tests": "tsx scripts/template-fidelity.ts"
   },
   "dependencies": {
     "harfbuzzjs": "^0.4.6",
