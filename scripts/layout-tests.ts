@@ -526,11 +526,13 @@ async function law15SiblingSizes() {
   assert(Math.abs(t('Villa').heightMm - 19.1) < 0.11, 'LAW 15', 'label size was touched')
 }
 
-/** LAW 16: the name column leads the reading direction (Arabic right, Latin left). */
+/** LAW 16: the name column leads the reading direction (Arabic right, Latin
+ * left) - a BOT law: the bot fixes a backwards sign; Perfect-it never
+ * relocates a column ("DOES NOT CHANGE LAYOUT"). */
 async function law16ReadingDirection() {
   const sp: TemplateSpec = { finish: 'lighted', layout: 'leftright', w: 400, h: 250, boltDia: 13.4, boltInsetX: 32.8, boltInsetY: 32.8, boltPattern: 'corners', divThick: 2.85 }
   const apply = async (design: Design) => {
-    const patches = await arrangeDesign(design, { mode: 'layout' })
+    const patches = await arrangeDesign(design, { mode: 'canonical' })
     for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
   }
   // Arabic sign built BACKWARDS (name on the left) must come out name-RIGHT
@@ -544,6 +546,13 @@ async function law16ReadingDirection() {
   await apply(d2)
   const divX2 = d2.elements.find((e) => e.kind === 'divider')!.x
   assert(t(d2, 'Ahmed').x < divX2 && t(d2, '30').x > divX2, 'LAW 16', `Latin name not on the left (name x=${t(d2, 'Ahmed').x}, div=${divX2})`)
+  // and the inverse contract: Perfect-it NEVER relocates a column - a
+  // backwards sign stays as the user built it
+  const d3 = makeDesign('l16c', signFromSpec(sp), botElements(sp, [['فيلا', '12'], ['احمد', 'العقاد']]))
+  const p3 = await arrangeDesign(d3, { mode: 'layout' })
+  for (const el of d3.elements) Object.assign(el, p3[el.id] ?? {})
+  const divX3 = d3.elements.find((e) => e.kind === 'divider')!.x
+  assert(t(d3, 'احمد').x < divX3, 'LAW 16', `Perfect-it relocated the name column (x=${t(d3, 'احمد').x} vs div ${divX3}) - it must NOT change the layout`)
 }
 
 /**

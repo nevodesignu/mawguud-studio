@@ -138,6 +138,100 @@ function probe(hole: Ring, t: number, centroid: Pt, halfWidth: number): EdgeProb
   return { p, dir: [nx, ny], snapped, flatness: dev / Math.max(1, chordLen) }
 }
 
+/** Unit tangent of the ring at its point nearest to `p`. */
+function tangentNear(ring: Ring, p: Pt): Pt {
+  const near = nearestOnRing(ring, p)
+  const L = ringLength(ring)
+  const eps = Math.max(0.4, L * 0.002) / L
+  const a = ringInterpolate(ring, (near.t - eps + 1) % 1)
+  const b = ringInterpolate(ring, (near.t + eps) % 1)
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const l = Math.hypot(dx, dy)
+  return l > 1e-9 ? [dx / l, dy / l] : [1, 0]
+}
+
+/** Direction change (radians) of the ring across a window centred on t. */
+function turnAt(ring: Ring, t: number, winMm: number): number {
+  const L = ringLength(ring)
+  const d = Math.min(0.2, winMm / L)
+  const a = ringInterpolate(ring, (t - d + 1) % 1)
+  const m = ringInterpolate(ring, t)
+  const b = ringInterpolate(ring, (t + d) % 1)
+  const v1: Pt = [m[0] - a[0], m[1] - a[1]]
+  const v2: Pt = [b[0] - m[0], b[1] - m[1]]
+  const l1 = Math.hypot(v1[0], v1[1])
+  const l2 = Math.hypot(v2[0], v2[1])
+  if (l1 < 1e-9 || l2 < 1e-9) return 0
+  const cos = Math.max(-1, Math.min(1, (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2)))
+  return Math.acos(cos)
+}
+
+/** All sharp-corner points of a ring: spots where the outline's turn is
+ * CONCENTRATED (a stroke junction, pinch or terminal), as opposed to a
+ * smooth bowl whose turn is spread evenly. These are the places a bridge
+ * must stay away from - measured euclidean, because a junction corner can
+ * be millimetres across the material yet far away along the outline. */
+function junctionPoints(ring: Ring): Pt[] {
+  const L = ringLength(ring)
+  const pts: Pt[] = []
+  const steps = Math.max(16, Math.round(L))
+  for (let i = 0; i < steps; i++) {
+    const t = i / steps
+    const short = turnAt(ring, t, 1.0)
+    const long = turnAt(ring, t, 2.6)
+    if (short - long / 2 > 0.35) pts.push(ringInterpolate(ring, t))
+  }
+  return pts
+}
+
+/** Distance from point q to the segment a-b. */
+function segDist(q: Pt, a: Pt, b: Pt): number {
+  const vx = b[0] - a[0]
+  const vy = b[1] - a[1]
+  const l2 = vx * vx + vy * vy
+  const t = l2 > 1e-12 ? Math.max(0, Math.min(1, ((q[0] - a[0]) * vx + (q[1] - a[1]) * vy) / l2)) : 0
+  return Math.hypot(q[0] - (a[0] + vx * t), q[1] - (a[1] + vy * t))
+}
+
+/**
+ * Junction penalty (owner 2026-08-27: "stay away from intersection... it
+ * gotta be clean"). A clean stroke has PARALLEL WALLS: the crossing width
+ * barely changes just beside the tab, and the far wall runs parallel to the
+ * near wall. Where strokes meet, the material widens into the joint, the
+ * walls skew, and the outline CREASES at the pinch - all measurable, all
+ * penalized.
+ */
+function junctionPenalty(hole: Ring, t: number, centroid: Pt, exterior: Ring, bridge: Bridge, settings: BridgeSettings, junctions: Pt[]): number {
+  const L = ringLength(hole)
+  const dT = Math.max(settings.width * 1.5, 2.5) / L
+  let widen = 1
+  for (const tt of [(t - dT + 1) % 1, (t + dT) % 1]) {
+    const pr = probe(hole, tt, centroid, settings.width / 2)
+    const s = rayHit(pr.p, pr.dir, exterior)
+    const ratio = s === null ? 3 : Math.max(1, Math.min(3, s / Math.max(0.2, bridge.span)))
+    widen = Math.max(widen, ratio)
+  }
+  const holeTan: Pt = tangentNear(hole, bridge.a)
+  const extTan: Pt = tangentNear(exterior, bridge.b)
+  const skew = Math.abs(holeTan[0] * extTan[1] - holeTan[1] * extTan[0]) // |sin| of wall angle
+  let dJunction = Infinity
+  for (const q of junctions) {
+    const d = segDist(q, bridge.a, bridge.b)
+    if (d < dJunction) dJunction = d
+  }
+  const corner = isFinite(dJunction) ? 3.2 / (1 + dJunction * dJunction * 0.55) : 0
+  // the universal junction tell (works even when strokes merge with smooth
+  // tangent joins, like a geometric 'a' bowl into its stem): the tab exits
+  // into a narrow NOTCH - material sits right across a small air gap. A tab
+  // on a clean stroke exits into open air.
+  const dir: Pt = [(bridge.b[0] - bridge.a[0]) / bridge.span, (bridge.b[1] - bridge.a[1]) / bridge.span]
+  const past: Pt = [bridge.b[0] + dir[0] * 0.11, bridge.b[1] + dir[1] * 0.11]
+  const airGap = rayHit(past, dir, exterior)
+  const notch = airGap !== null && airGap < 8 ? 2.6 / (1 + airGap * airGap * 0.3) : 0
+  return 1 + Math.max(0, widen - 1.15) * 1.4 + skew * 1.2 + corner + notch
+}
+
 /** Tab width proportional to the stroke it crosses, floored at the user's setting. */
 function tabWidth(span: number, settings: BridgeSettings): number {
   return Math.min(Math.max(settings.width, span * 0.7), Math.max(settings.width, 6))
@@ -222,6 +316,9 @@ export function addBridges(
       .sort((h1, h2) => ringArea(h2) - ringArea(h1))
 
     const placedRects: Ring[] = []
+    // every sharp corner on this island - junctions a bridge must stay clear of
+    const islandJunctions: Pt[] = junctionPoints(exterior)
+    for (const hh of big) islandJunctions.push(...junctionPoints(hh))
 
     for (const hole of big) {
       let key = holeKey(elId, hole, originX, originY)
@@ -241,8 +338,13 @@ export function addBridges(
           const bridge = buildBridge(key, hole, i / n, centroid, exterior, otherHoles, settings, false)
           if (!bridge) continue
           const pr = probe(hole, i / n, centroid, settings.width / 2)
-          // short crossings first; axis-aligned cuts and flat edges look designed
-          const score = bridge.span * (pr.snapped ? 1 : 1.3) * (1 + pr.flatness * 2)
+          // short crossings first; axis-aligned cuts and flat edges look
+          // designed; junctions (walls widening or skewing) look BROKEN
+          const jp = junctionPenalty(hole, i / n, centroid, exterior, bridge, settings, islandJunctions)
+          const score = bridge.span * (pr.snapped ? 1 : 1.3) * (1 + pr.flatness * 2) * jp
+          if ((globalThis as { BRIDGE_DEBUG?: string }).BRIDGE_DEBUG === key) {
+            console.log(`  t=${(i / n).toFixed(3)} a=(${bridge.a[0].toFixed(1)},${bridge.a[1].toFixed(1)}) span=${bridge.span.toFixed(2)} snap=${pr.snapped} flat=${pr.flatness.toFixed(2)} jp=${jp.toFixed(2)} score=${score.toFixed(2)}`)
+          }
           cands.push({ score, bridge })
         }
         cands.sort((c1, c2) => c1.score - c2.score)

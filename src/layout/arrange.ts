@@ -690,9 +690,12 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     const leftSpot = left.length ? inkCenterOf(left) : null
 
     // LAW 16: the name column leads the reading direction - an Arabic name
-    // goes RIGHT (read first), a Latin name goes LEFT. Swap if backwards.
+    // goes RIGHT (read first), a Latin name goes LEFT. The BOT swaps a
+    // backwards sign; Perfect-it NEVER does ("DOES NOT CHANGE LAYOUT") -
+    // relocating a column across the divider is a layout change, not an
+    // alignment.
     const nameish = (g: Measured[]) => g.some((m) => m.role === 'name')
-    if (right.length && left.length && nameish(right) !== nameish(left)) {
+    if (mode === 'canonical' && right.length && left.length && nameish(right) !== nameish(left)) {
       const nameCol = nameish(right) ? right : left
       const otherCol = nameish(right) ? left : right
       const nameGoesRight = nameCol.some((m) => hasArabic(m.el.text))
