@@ -37,6 +37,7 @@ const spec = (layout: Layout, w: number, h: number): TemplateSpec => ({
   boltInsetY: 32.8,
   boltPattern: 'corners',
   divThick: 2.85,
+  radius: 2.5,
 })
 
 interface Case {
@@ -670,6 +671,42 @@ async function law17NameSplit() {
 }
 
 /**
+ * MANUAL SPACING IS SOVEREIGN (owner 2026-08-27, final Perfect-it contract:
+ * "does not change the layout - i do it... dont make it make spacing - i do
+ * it manually - it just aligns and makes sure the sign have no errors"):
+ * Perfect-it never re-spaces a gap the user made. Vertical gaps survive the
+ * button EXACTLY; only alignment (shared X), error fixes and the law-21
+ * group-centering translation are allowed to move anything.
+ */
+async function manualSpacingSovereign() {
+  const label = 'MANUAL SPACING'
+  const sp: TemplateSpec = { finish: 'mirror', layout: 'leftright', w: 400, h: 200, boltDia: 6.6, boltInsetX: 23.6, boltInsetY: 23.6, boltPattern: 'sides', divThick: 2.85, radius: 2.5 }
+  const design = makeDesign('spc', signFromSpec(sp), botElements(sp, [['م/يحيي', 'اسلام'], ['شقة', '20']]))
+  const t = (txt: string) => design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === txt)!
+  const apply = async () => {
+    const patches = await arrangeDesign(design, { mode: 'layout' })
+    for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  }
+  const p0 = await arrangeDesign(design, { mode: 'canonical' })
+  for (const el of design.elements) Object.assign(el, p0[el.id] ?? {})
+  // the user opens the name gap wide and tightens the label onto its number -
+  // BOTH custom gaps must survive Perfect-it to the tenth of a millimetre
+  t('اسلام').y += 17
+  t('شقة').y += 6
+  const gapNames = t('اسلام').y - t('م/يحيي').y
+  const gapLabel = t('20').y - t('شقة').y
+  await apply()
+  assert(Math.abs(t('اسلام').y - t('م/يحيي').y - gapNames) < 0.11, label, `name gap re-spaced: ${(t('اسلام').y - t('م/يحيي').y).toFixed(1)} vs ${gapNames.toFixed(1)}`)
+  assert(Math.abs(t('20').y - t('شقة').y - gapLabel) < 0.11, label, `label gap re-spaced: ${(t('20').y - t('شقة').y).toFixed(1)} vs ${gapLabel.toFixed(1)}`)
+  // alignment still happened
+  assert(Math.abs(t('م/يحيي').x - t('اسلام').x) < 0.11, label, 'column lost its shared X')
+  // and hammering the button changes nothing
+  const snap = design.elements.map((e) => [e.x, e.y] as const)
+  await apply()
+  design.elements.forEach((e, i) => assert(Math.abs(e.x - snap[i][0]) <= 0.15 && Math.abs(e.y - snap[i][1]) <= 0.15, label, `not idempotent: el ${i}`))
+}
+
+/**
  * LAW 22 (owner 2026-08-27: "IT CANNOT NEVER EVER LETTERS DIVIDER HIT THE
  * BOLTS"): letters keep clear of every bolt hole in both modes - the solver
  * fills between the bolts, and Perfect-it pushes a hand-dragged block off a
@@ -740,6 +777,7 @@ async function main() {
   await law19DividerClear()
   await law20RowHuddle()
   await law22BoltClearance()
+  await manualSpacingSovereign()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')

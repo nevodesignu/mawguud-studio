@@ -3,19 +3,17 @@
 // THE CONTRACT (the owner's words: "I do the sizing - just make the sign
 // ready"): two modes.
 //
-//   'layout'    - Perfect-it = CLEAN UP MY ARRANGEMENT. The user's current
-//                 positions are the spec: they decide which side of the
-//                 divider each line is on, which lines form a block, and the
-//                 top-to-bottom order. The engine then perfects what the user
-//                 cannot be asked to do by hand - tight ink spacing inside a
-//                 block, one shared X per column, level rows, the divider
-//                 re-fit into the gap - while each BLOCK stays where the user
-//                 put it and no text size ever changes. At the end the whole
-//                 ensemble - text + divider, one group - is centered on the
-//                 board ("at the end of the day this part gotta be at the
-//                 center"). Drag a line to the other column and Perfect-it
-//                 reflows both; nudge one line of a stack and the stack
-//                 re-tightens around the block's new middle.
+//   'layout'    - Perfect-it = ALIGN + REMOVE ERRORS, NOTHING ELSE (owner,
+//                 final: "does not change the layout - i do it... dont make
+//                 it make spacing - i do it manually - it just aligns and
+//                 makes sure the sign have no errors"). The user makes the
+//                 layout AND the spacing: every line keeps its own y exactly.
+//                 The engine only: aligns (a column shares one X, a row one
+//                 Y, near-aligned blocks weld to one axis), fixes errors
+//                 (letters+divider clear of every bolt, divider re-fit into
+//                 the real gap, name column on its reading side), and
+//                 centers the whole ensemble as one group (law 21). No text
+//                 size ever changes; no gap the user made is ever re-spaced.
 //   'canonical' - Sign Bot. Also sizes the text, using roles trained on the
 //                 real production files, then tamed per LAW 18 (label ~0.85
 //                 above a 1.45 number, names 1.0, numbers capped at 24% of
@@ -301,6 +299,16 @@ function placeStack(lines: Measured[], H: HeightOf, cx: number, cy: number, patc
     patches[m.el.id] = { x: r1(cx), y: r1(y + inkHs[i] / 2), heightMm: r1(hs[i]) }
     y += inkHs[i] + gap
   })
+}
+
+/** v7 cleanup placement: a column shares ONE X, but every line keeps its own
+ * y - the user makes the spacing, the engine only aligns. */
+function placeAligned(lines: Measured[], H: HeightOf, cx: number, patches: Record<string, ElPatch>, stacks?: string[][]): void {
+  if (lines.length === 0) return
+  if (stacks && lines.length > 1) stacks.push(lines.map((m) => m.el.id))
+  for (const m of lines) {
+    patches[m.el.id] = { x: r1(cx), y: r1(m.el.y), heightMm: r1(H(m)) }
+  }
 }
 
 /** Canonical-units stack extent (for solving the scale factor). */
@@ -698,12 +706,15 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
     // the divider always tracks the content beside it (both modes)
     const divLen = clamp(Math.max(stackExtent(R, H), stackExtent(L, H)) * 1.15, 0.22 * h, 0.8 * h)
     patches[div.id] = { x: r1(divX), y: r1(h / 2), vertical: true, length: r1(clampDividerToBolts(design, divX, h / 2, true, div.thickness, divLen)) }
-    // Perfect-it rebuilds each column around the spot the user left it;
-    // the bot uses its own canonical geometry
-    const tR = mode === 'layout' && rightSpot ? rightSpot : { cx: cxR, cy: h / 2 }
-    const tL = mode === 'layout' && leftSpot ? leftSpot : { cx: cxL, cy: h / 2 }
-    placeStack(R, H, tR.cx, tR.cy, patches, stacks)
-    placeStack(L, H, tL.cx, tL.cy, patches, stacks)
+    if (mode === 'layout') {
+      // v7: align each column on the X of the side the user gave it (after a
+      // law-16 swap the columns trade sides); every line keeps its own y
+      placeAligned(R, H, rightSpot ? rightSpot.cx : cxR, patches, stacks)
+      placeAligned(L, H, leftSpot ? leftSpot.cx : cxL, patches, stacks)
+    } else {
+      placeStack(R, H, cxR, h / 2, patches, stacks)
+      placeStack(L, H, cxL, h / 2, patches, stacks)
+    }
     sides = { aIds: L.map((m) => m.el.id), bIds: R.map((m) => m.el.id) }
     if (oneRow && R.length && L.length) rows.push([R[0].el.id, L[0].el.id])
   } else if (div) {
@@ -802,8 +813,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       // widest adjacent content - never past it
       const rowDivLen = clampDividerToBolts(design, w / 2, divY, false, div.thickness, Math.max(rowSpan, blockWidth(bottom, H)))
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(rowDivLen) }
-      const tB = mode === 'layout' && bottom.length ? inkCenterOf(bottom) : { cx: w / 2, cy: cyB }
-      placeStack(bottom, H, tB.cx, tB.cy, patches, stacks)
+      if (mode === 'layout') placeAligned(bottom, H, bottom.length ? inkCenterOf(bottom).cx : w / 2, patches, stacks)
+      else placeStack(bottom, H, w / 2, cyB, patches, stacks)
       rows.push([leftM.el.id, rightM.el.id])
       sides = { aIds: row.map((m) => m.el.id), bIds: bottom.map((m) => m.el.id) }
     } else {
@@ -845,10 +856,13 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
       // exact content span: first letter to last letter of the widest block
       const divLen = Math.max(0.2 * w, blockWidth(top, H), blockWidth(bottom, H))
       patches[div.id] = { x: r1(w / 2), y: r1(divY), vertical: false, length: r1(clampDividerToBolts(design, w / 2, divY, false, div.thickness, divLen)) }
-      const tT = mode === 'layout' && top.length ? inkCenterOf(top) : { cx: w / 2, cy: cyT }
-      const tB = mode === 'layout' && bottom.length ? inkCenterOf(bottom) : { cx: w / 2, cy: cyB }
-      placeStack(top, H, tT.cx, tT.cy, patches, stacks)
-      placeStack(bottom, H, tB.cx, tB.cy, patches, stacks)
+      if (mode === 'layout') {
+        placeAligned(top, H, top.length ? inkCenterOf(top).cx : w / 2, patches, stacks)
+        placeAligned(bottom, H, bottom.length ? inkCenterOf(bottom).cx : w / 2, patches, stacks)
+      } else {
+        placeStack(top, H, w / 2, cyT, patches, stacks)
+        placeStack(bottom, H, w / 2, cyB, patches, stacks)
+      }
       sides = { aIds: top.map((m) => m.el.id), bIds: bottom.map((m) => m.el.id) }
     }
   } else {
@@ -862,8 +876,8 @@ async function arrangeCore(design: Design, mode: ArrangeMode, heightOverride?: M
         s = Math.min(s, ((m.role === 'number' ? NUMBER_CAP : LINE_CAP) * h) / ratioOf(m))
       }
       const H: HeightOf = mode === 'canonical' ? scaled(s) : (m) => (isFinal(m) ? userHeights(m) : Math.max(userHeights(m), scaled(s)(m)))
-      const t = mode === 'layout' ? inkCenterOf(lines) : { cx: w / 2, cy: h / 2 }
-      placeStack(lines, H, t.cx, t.cy, patches, stacks)
+      if (mode === 'layout') placeAligned(lines, H, inkCenterOf(lines).cx, patches, stacks)
+      else placeStack(lines, H, w / 2, h / 2, patches, stacks)
     }
   }
   return { patches, stacks, rows, measured, sides }

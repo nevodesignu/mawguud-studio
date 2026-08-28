@@ -34,6 +34,7 @@ const mirror = (layout: Layout, w: number, h: number): TemplateSpec => ({
   boltInsetY: 23.6,
   boltPattern: 'sides',
   divThick: 2.85,
+  radius: 2.5,
 })
 
 const CASES: { name: string; spec: TemplateSpec; groups: string[][] }[] = [
