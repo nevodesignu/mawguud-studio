@@ -781,6 +781,51 @@ async function law22BoltClearance() {
   d2.elements.forEach((e, i) => assert(Math.abs(e.x - snap[i][0]) <= 0.2 && Math.abs(e.y - snap[i][1]) <= 0.2, label, `pinned board not idempotent: el ${i}`))
 }
 
+/**
+ * LAW 23 (owner 2026-08-27: "ahmed elakkad is not parallel... they have to be
+ * parallel"): stacked name lines justify to one width via letter-spacing -
+ * flush left AND right. Sizes untouched, Arabic joins untouched, very short
+ * lines left alone.
+ */
+async function law23Parallel() {
+  const label = 'LAW 23'
+  const sp: TemplateSpec = { finish: 'lighted', layout: 'leftright', w: 400, h: 250, boltDia: 13.0, boltInsetX: 32.5, boltInsetY: 32.5, boltPattern: 'corners', divThick: 2.5, radius: 2.5 }
+  const design = makeDesign('par', signFromSpec(sp), botElements(sp, [['Ahmed', 'Elakkad'], ['Villa', '30']]))
+  const patches = await arrangeDesign(design, { mode: 'canonical' })
+  for (const el of design.elements) Object.assign(el, patches[el.id] ?? {})
+  const { texts } = await placed(design)
+  const ahmed = texts.find((t) => t.el.text === 'Ahmed')!
+  const elak = texts.find((t) => t.el.text === 'Elakkad')!
+  const wA = ahmed.right - ahmed.left
+  const wE = elak.right - elak.left
+  assert(Math.abs(wA - wE) < 1.2, label, `name lines not parallel: Ahmed ${wA.toFixed(1)}mm vs Elakkad ${wE.toFixed(1)}mm`)
+  assert(Math.abs(ahmed.left - elak.left) < 1, label, `left edges not flush: ${ahmed.left.toFixed(1)} vs ${elak.left.toFixed(1)}`)
+  assert(Math.abs(ahmed.right - elak.right) < 1, label, `right edges not flush: ${ahmed.right.toFixed(1)} vs ${elak.right.toFixed(1)}`)
+  const hA = design.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'Ahmed')!
+  assert(hA.spacingEm > 0.005, label, 'the shorter line gained no tracking')
+
+  // Perfect-it does the same on a hand-built sign - and it is idempotent
+  const d2 = makeDesign('par2', signFromSpec(sp), botElements(sp, [['Ahmed', 'Elakkad'], ['Villa', '30']]))
+  const p20 = await arrangeDesign(d2, { mode: 'layout' })
+  for (const el of d2.elements) Object.assign(el, p20[el.id] ?? {})
+  const { texts: t2 } = await placed(d2)
+  const a2 = t2.find((t) => t.el.text === 'Ahmed')!
+  const e2 = t2.find((t) => t.el.text === 'Elakkad')!
+  assert(Math.abs(a2.right - a2.left - (e2.right - e2.left)) < 1.2, label, `Perfect-it did not justify: ${(a2.right - a2.left).toFixed(1)} vs ${(e2.right - e2.left).toFixed(1)}`)
+  const sp1 = d2.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'Ahmed')!.spacingEm
+  const p21 = await arrangeDesign(d2, { mode: 'layout' })
+  for (const el of d2.elements) Object.assign(el, p21[el.id] ?? {})
+  const sp2 = d2.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'Ahmed')!.spacingEm
+  assert(Math.abs(sp2 - sp1) < 0.005, label, `tracking not stable across presses: ${sp1} -> ${sp2}`)
+
+  // a very short line is NOT stretched across
+  const d3 = makeDesign('par3', signFromSpec(sp), botElements(sp, [['Dr.', 'Mohamed Hassan'], ['Villa', '7']]))
+  const p3 = await arrangeDesign(d3, { mode: 'canonical' })
+  for (const el of d3.elements) Object.assign(el, p3[el.id] ?? {})
+  const dr = d3.elements.find((e): e is TextEl => e.kind === 'text' && e.text === 'Dr.')!
+  assert(dr.spacingEm < 0.05, label, `"Dr." was stretched across the name (spacing ${dr.spacingEm})`)
+}
+
 async function main() {
   await initHB(readFileSync(join(root, 'node_modules/harfbuzzjs/hb.wasm')))
   setFontDataProvider(async (id) => {
@@ -808,6 +853,7 @@ async function main() {
   await law20RowHuddle()
   await law22BoltClearance()
   await manualSpacingSovereign()
+  await law23Parallel()
   console.log(`\n${checks} checks, ${failures} failures across ${CASES.length} text cases x 3 board sizes`)
   if (failures > 0) process.exit(1)
   console.log('layout engine: ALL GREEN')

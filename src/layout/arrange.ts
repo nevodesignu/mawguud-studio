@@ -426,6 +426,56 @@ function unifyAxesBlocks(design: Design, patches: Record<string, ElPatch>, stack
 }
 
 /**
+ * LAW 23 (owner 2026-08-27: "ahmed elakkad is not parallel... they have to be
+ * parallel"): stacked NAME lines justify to ONE width - the shorter line's
+ * letter-spacing widens until both lines run flush left AND right, like every
+ * hand-made sign. The widest line sets the width (nothing resizes), tracking
+ * never breaks Arabic joins (it cannot - the shaper only spaces runs), a
+ * hand-set tracking is only ever widened, and a line under 55% of the widest
+ * is left alone - stretching "Dr." across a long name would look worse.
+ */
+async function justifyStacks(design: Design, patches: Record<string, ElPatch>, stacks: string[][]): Promise<void> {
+  const byId = new Map(design.elements.map((e) => [e.id, e]))
+  for (const group of stacks) {
+    const els = group
+      .map((id) => byId.get(id))
+      .filter((e): e is TextEl => !!e && e.kind === 'text' && e.text.trim().length > 0)
+      .filter((e) => !isNumberLine(e.text) && !LABEL_RE.test(e.text.trim()))
+    if (els.length < 2) continue
+    const infos: { el: TextEl; wMm: number; slopeMmPerEm: number }[] = []
+    for (const el of els) {
+      const sp = patches[el.id]?.spacingEm ?? el.spacingEm
+      const hh = patches[el.id]?.heightMm ?? el.heightMm
+      try {
+        const s0 = await shapedAsync(el.fontId, el.text, sp)
+        const s1 = await shapedAsync(el.fontId, el.text, sp + 0.1)
+        const ref = s0.refHeight > 0 ? s0.refHeight : s0.bbox.maxY - s0.bbox.minY
+        if (!(ref > 0)) continue
+        const w0 = ((s0.bbox.maxX - s0.bbox.minX) / ref) * hh
+        const w1 = ((s1.bbox.maxX - s1.bbox.minX) / ref) * hh
+        infos.push({ el, wMm: w0, slopeMmPerEm: (w1 - w0) / 0.1 })
+      } catch {
+        /* unshapeable - leave the line alone */
+      }
+    }
+    if (infos.length < 2) continue
+    const target = Math.max(...infos.map((i) => i.wMm))
+    for (const info of infos) {
+      if (info.wMm > target - 0.3) continue // already flush
+      if (info.wMm < target * 0.55) continue // too short - stretching looks worse
+      if (info.slopeMmPerEm < 0.01) continue // fully joined - cannot widen
+      const sp = patches[info.el.id]?.spacingEm ?? info.el.spacingEm
+      const extra = (target - info.wMm) / info.slopeMmPerEm
+      const next = Math.round(Math.min(0.4, sp + extra) * 1000) / 1000
+      if (next > sp + 0.001) {
+        const p = patches[info.el.id] ?? (patches[info.el.id] = {})
+        p.spacingEm = next
+      }
+    }
+  }
+}
+
+/**
  * LAW 15: sibling texts of the same kind at ALMOST the same size were meant to
  * be equal. With no hand-sized member the cluster unifies UP to the biggest;
  * a hand-sized member is the LEADER - the whole cluster adopts the user's
@@ -506,6 +556,7 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   const mode: ArrangeMode = opts.mode ?? 'layout'
   if (mode !== 'layout') {
     const { patches, measured, stacks, rows } = await arrangeCore(design, mode, undefined)
+    await justifyStacks(design, patches, stacks) // LAW 23: name lines run flush
     unifyAxes(design, patches)
     resolveObstacles(design, patches, measured, stacks, rows) // LAW 22
     return patches
@@ -518,7 +569,15 @@ export async function arrangeDesign(design: Design, opts: ArrangeOpts = {}): Pro
   const first = await layoutOnce(design)
   const settled: Design = JSON.parse(JSON.stringify(design))
   for (const el of settled.elements) Object.assign(el, first[el.id] ?? {})
-  return layoutOnce(settled)
+  const second = await layoutOnce(settled)
+  // merge: pass 2 wins where it speaks, but a field only pass 1 set (e.g. the
+  // law-23 tracking, which pass 2 sees as already-applied and stays silent
+  // about) must not be dropped
+  const merged: Record<string, ElPatch> = {}
+  for (const id of new Set([...Object.keys(first), ...Object.keys(second)])) {
+    merged[id] = { ...first[id], ...second[id] }
+  }
+  return merged
 }
 
 /** One cleanup pass - see the contract at the top of the file. */
@@ -526,6 +585,7 @@ async function layoutOnce(design: Design): Promise<Record<string, ElPatch>> {
   const { w, h } = design.sign
   const heightOverride = unifySizes(design)
   const { patches, stacks, rows, measured, sides } = await arrangeCore(design, 'layout', heightOverride)
+  await justifyStacks(design, patches, stacks) // LAW 23: name lines run flush
   // arrangeCore already rebuilt every block - tight spacing, shared axes,
   // user order - around the spot the user left it. What remains is the
   // divider, cross-block alignment, and the group's position.
